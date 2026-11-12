@@ -1,0 +1,9 @@
+# gopher root configuration. Paths are relative to this root.
+
+[paths]
+projects_dir = "projects"
+archived_dir = "archived"
+closed_dir = "closed"
+agent_dir = "gopher"
+state_dir = "tmp/gopher"
+prompts_dir = "prompts"
