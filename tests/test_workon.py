@@ -82,6 +82,7 @@ def test_setup_commands_match_and_render(root, tmp_path):
     lines = workon.source_lines(config, "alpha", tmp_path / "mono" / "feat")
     assert lines[0] == f"cd {tmp_path / 'mono' / 'feat'}"
     assert f"GOPHER_HOME={root}" in lines[1] and "GOPHER_PROJECT=alpha" in lines[1]
+    assert lines[2] == '[ -n "${TMUX_PANE:-}" ] && tmux rename-window -t "$TMUX_PANE" alpha'
     assert lines[-3:] == ["env-tool activate feat", "echo alpha", "auth-try"]
 
 

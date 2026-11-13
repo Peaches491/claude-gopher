@@ -226,7 +226,7 @@ def source_lines(config: Config, project: str, checkout: Path | None) -> list[st
     lines = [
         f"cd {shlex.quote(str(workdir(config, project, checkout)))}",
         f"export GOPHER_HOME={shlex.quote(str(config.root))} GOPHER_PROJECT={shlex.quote(project)}",
-        f'[ -n "${{TMUX:-}}" ] && tmux rename-window {shlex.quote(project)}',
+        f'[ -n "${{TMUX_PANE:-}}" ] && tmux rename-window -t "$TMUX_PANE" {shlex.quote(project)}',
     ]
     lines += setup_commands(config, project, checkout)
     lines += workon_settings(config).get("pre_launch", [])
