@@ -12,3 +12,4 @@ core only.
 | `archive.md`, `close.md`, `reopen.md` | lifecycle transitions |
 | `inbox.md` | framing of injected inbox items |
 | `tui-summary.md` | the TUI's summary refresh |
+| `tui-detail.md` | the TUI's expanded-project summary |

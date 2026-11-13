@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from claude_gopher import cli
+from claude_gopher import cli, overview
 from claude_gopher.checkouts import add_checkout
 from claude_gopher.config import load_config
 from claude_gopher.inbox import INBOX_LIMIT, add_item, inbox_context, read_item, unread
@@ -143,7 +143,7 @@ def test_list_and_projects_overview(root, tmp_path, monkeypatch, capsys):
     add_item(root / "projects" / "beta", "urgent", wake=True, now=NOW)
     add_item(root / "projects" / "beta", "later", now=NOW)
     add_checkout(root / "projects", "beta", tmp_path / "co")
-    monkeypatch.setattr(cli, "current_sessions", lambda config: [{"session_id": "x", "project": "beta", "state": "waiting"}])
+    monkeypatch.setattr(overview, "current_sessions", lambda config: [{"session_id": "x", "project": "beta", "state": "waiting"}])
     assert cli.main(["list"]) == 0
     assert capsys.readouterr().out.splitlines() == ["alpha", "beta   Second one"]
     assert cli.main(["list", "--names"]) == 0

@@ -10,6 +10,10 @@ You are working on project `{{project}}`, whose directory is `{{project_dir}}`.
   leave history to `notes/` and the code's own history.
 - When you create or discover a ticket, pull request, document, or dashboard the project depends
   on, add it under `resources/` (`gopher prompt resources` first).
+- `{{reference_dir}}/` is the shared reference library (index: `README.md`): playbooks, processes,
+  and key docs used across projects. Check it before hunting for a process doc. It is read-only
+  for you: to add or correct an item, `SendMessage` the `gopher` agent (if it is not running, tell
+  the user).
 - Items in `inbox/` are messages for you from Gopher or the user, handled like email: the user
   decides when. `gopher prompt inbox` has the details.
 - When every to-do is resolved or the scope is done, ask the user whether to archive or close the

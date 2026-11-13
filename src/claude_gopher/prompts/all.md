@@ -71,4 +71,5 @@ when present.
 
 `gopher projects` (all projects and their agents), `gopher agents` (running agents),
 `gopher prompt <context>` (instructions for a context: resources, archive, close, reopen, inbox),
-`gopher project new <name>`, `gopher checkout ...`.
+`gopher project new <name>`, `gopher project rename <old> <new>` (never rename a project directory
+by hand), `gopher checkout ...`.

@@ -7,7 +7,7 @@ helps you `workon` your separate projects.
   or more linked git checkouts.
 - **Gopher**: a Claude Code session that lives in tmux window 0 (and a `prefix g` popup). Tell it
   anything about any project; it files it in that project's inbox or messages the project's agent.
-- **TUI**: a live table of projects, their agents' states, summaries, and PRs.
+- **TUI**: a live list of project blocks: their agents' states, summaries, and PRs.
 
 Design: [docs/design.md](docs/design.md).
 
@@ -45,11 +45,28 @@ gopher setup                            # create or adopt a root, install hooks,
 gopher setup --review                   # re-run the interview on an existing root
 gopher new ~/workon                     # scriptable: create, git init, register (or --from <git-url>)
 gopher project new my-feature --checkout ~/src/repo-my-feature
+gopher project rename my-feature better-name
 gopher checkout move ~/src/repo-my-feature other-project
 gopher checkout list
 ```
 
 Checkouts are never written to; ownership lives in `projects/<p>/checkouts.toml`.
+
+## Gopher and the TUI
+
+```bash
+gopher launch                           # start the gopher tmux session; link its window at index 0
+gopher tui                              # the dashboard (gopher launch runs it in the left pane)
+```
+
+Source `examples/tmux.conf` from your tmux config for the `prefix g` popup and to run
+`gopher launch` whenever a client attaches. Gopher runs `claude --model sonnet` by default; set
+`[gopher] model` in the root's `config.toml` to change it.
+
+TUI keys: `j`/`k` move, `l`/`enter` expand (Haiku summary + STATUS.md), `t` jump to the agent, `x`
+mark finished work as seen, `m`/`M` file an inbox item (`M` wakes the agent), `r` one-line Haiku
+summary, `P` cycle Gopher's proactivity, `ctrl+r` refresh, `q` quit. In the Gopher window, `i` addresses the project to Gopher and
+`R` asks Gopher for a deep dive.
 
 ## Prompts
 

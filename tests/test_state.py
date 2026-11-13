@@ -40,6 +40,7 @@ def test_state_for(payload, expected):
 def test_lifecycle_writes_and_removes_record(tmp_path):
     sessions = tmp_path / "sessions"
     env = {"TMUX_PANE": "%7", "GOPHER_PROJECT": "demo"}
+    (tmp_path / "projects" / "demo").mkdir(parents=True)
     apply_event(event("SessionStart", transcript_path="/t.jsonl"), sessions, tmp_path / "projects", env, now=1.0)
     apply_event(event("UserPromptSubmit"), sessions, tmp_path / "projects", env, now=2.0)
     record = json.loads((sessions / "s1.json").read_text())
@@ -100,8 +101,17 @@ def test_project_recomputed_when_cwd_changes(tmp_path):
 
 
 def test_env_project_wins(tmp_path):
+    (tmp_path / "projects" / "env").mkdir(parents=True)
     record = apply_event(event("Stop"), tmp_path, tmp_path / "projects", {"GOPHER_PROJECT": "env"})
     assert record["project"] == "env"
+
+
+def test_env_project_for_missing_project_falls_back_to_checkout(tmp_path):
+    projects = tmp_path / "projects"
+    repo = tmp_path / "repo"
+    own(projects, "renamed", repo)
+    record = apply_event(event("Stop", cwd=str(repo)), tmp_path / "s", projects, {"GOPHER_PROJECT": "old-name"})
+    assert record["project"] == "renamed"
 
 
 def write(sessions, sid, pane, updated):
@@ -131,3 +141,24 @@ def test_hook_settings_shape():
     assert set(hooks) == set(state.HOOK_EVENTS)
     assert hooks["PreToolUse"][0]["matcher"] == "AskUserQuestion"
     assert "matcher" not in hooks["Stop"][0]
+
+
+def test_cached_project_re_resolved_after_rename(tmp_path):
+    projects = tmp_path / "projects"
+    repo = tmp_path / "repo"
+    own(projects, "old", repo)
+    sessions = tmp_path / "s"
+    assert apply_event(event("Stop", cwd=str(repo)), sessions, projects, {})["project"] == "old"
+    (projects / "old").rename(projects / "new")
+    assert apply_event(event("Stop", cwd=str(repo)), sessions, projects, {})["project"] == "new"
+
+
+def test_finished_set_on_stop_and_cleared_on_next_turn(tmp_path):
+    sessions = tmp_path / "sessions"
+    env = {"TMUX_PANE": "%7"}
+    apply_event(event("UserPromptSubmit"), sessions, tmp_path / "projects", env, now=1.0)
+    apply_event(event("Stop"), sessions, tmp_path / "projects", env, now=2.0)
+    apply_event(event("Notification", notification_type="idle_prompt"), sessions, tmp_path / "projects", env, now=3.0)
+    assert json.loads((sessions / "s1.json").read_text())["finished"] == 2.0
+    apply_event(event("UserPromptSubmit"), sessions, tmp_path / "projects", env, now=4.0)
+    assert "finished" not in json.loads((sessions / "s1.json").read_text())

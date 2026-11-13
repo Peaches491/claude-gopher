@@ -233,13 +233,13 @@ def source_lines(config: Config, project: str, checkout: Path | None) -> list[st
     return lines
 
 
-def agent_argv(agent: Agent, passthrough: list[str]) -> list[str]:
+def agent_argv(agent: Agent, passthrough: list[str], kickoff: str = SESSION_KICKOFF) -> list[str]:
     resuming = any(
         arg == flag or arg.startswith(f"{flag}=") for arg in passthrough for flag in agent.resume_flags
     )
     argv = [*agent.command, *passthrough]
     if agent.kickoff and not resuming:
-        argv.append(SESSION_KICKOFF)
+        argv.append(kickoff)
     return argv
 
 

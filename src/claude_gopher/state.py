@@ -8,6 +8,7 @@ from pathlib import Path
 from claude_gopher.checkouts import project_for_cwd
 
 IDLE, WORKING, WAITING = "idle", "working", "waiting"
+CREDS_GLYPH = "\u2715"
 
 WAITING_NOTIFICATIONS = {"permission_prompt", "elicitation_dialog", "agent_needs_input"}
 WAITING_TOOLS = {"AskUserQuestion"}
@@ -44,7 +45,7 @@ def state_for(payload: dict) -> str | None:
 
 
 def resolve_project(cwd: str, projects_dir: Path, env: dict) -> str | None:
-    if project := env.get("GOPHER_PROJECT"):
+    if (project := env.get("GOPHER_PROJECT")) and (projects_dir / project).is_dir():
         return project
     if cwd and projects_dir in Path(cwd).parents:
         name = Path(cwd).relative_to(projects_dir).parts[0]
@@ -97,19 +98,25 @@ def apply_event(payload: dict, sessions_dir: Path, projects_dir: Path, env: dict
         return None
     record = read_record(path) or {"session_id": session_id}
     cwd = payload.get("cwd") or record.get("cwd") or ""
-    if "project" not in record or record.get("cwd") != cwd:
+    cached = record.get("project")
+    if "project" not in record or record.get("cwd") != cwd or (cached and not (projects_dir / cached).is_dir()):
         record["project"] = resolve_project(cwd, projects_dir, env)
     pane = env.get("TMUX_PANE")
     if pane and (record.get("pane") != pane or not record.get("tmux_window")):
         record["pane"] = pane
         record["tmux_window"] = tmux_window(pane)
+    event = payload.get("hook_event_name")
     record.update(
         state=state,
-        event=payload.get("hook_event_name"),
+        event=event,
         cwd=cwd,
         transcript_path=payload.get("transcript_path") or record.get("transcript_path"),
         updated=now if now is not None else time.time(),
     )
+    if event == "Stop":
+        record["finished"] = record["updated"]
+    elif state != IDLE:
+        record.pop("finished", None)
     write_record(path, record)
     return record
 
@@ -120,7 +127,7 @@ LEADING_GLYPHS = re.compile(r"^[^\w(\[]+\s*")
 def pane_locations() -> dict[str, dict] | None:
     try:
         out = subprocess.run(
-            ["tmux", "list-panes", "-a", "-F", "#{pane_id}\t#{window_index}\t#{pane_index}\t#{window_name}"],
+            ["tmux", "list-panes", "-a", "-F", "#{pane_id}\t#{session_name}\t#{window_index}\t#{pane_index}\t#{window_name}"],
             capture_output=True, text=True, timeout=2,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -129,11 +136,13 @@ def pane_locations() -> dict[str, dict] | None:
         return None
     locations = {}
     for line in out.stdout.splitlines():
-        pane, window_index, pane_index, window_name = (line.split("\t", 3) + ["", "", ""])[:4]
+        pane, session, window_index, pane_index, window_name = (line.split("\t", 4) + ["", "", "", ""])[:5]
         locations[pane] = {
+            "session": session,
             "window_index": window_index,
             "pane_index": pane_index,
             "window_name": LEADING_GLYPHS.sub("", window_name),
+            "blocked_creds": window_name.startswith(CREDS_GLYPH),
         }
     return locations
 
@@ -142,6 +151,8 @@ def location_label(location: dict | None, with_name: bool = True) -> str:
     if not location:
         return "-"
     label = f"{location['window_index']}.{location['pane_index']}"
+    if location.get("session"):
+        label = f"{location['session']}:{label}"
     return f"{label} {location['window_name']}" if with_name and location["window_name"] else label
 
 
@@ -194,6 +205,7 @@ def merge_sessions(hook_records: list[dict], registry: list[dict] | None, projec
         if hooked:
             record["project"] = hooked.get("project")
             record["transcript_path"] = hooked.get("transcript_path")
+            record["finished"] = hooked.get("finished")
             if hooked.get("updated", 0) > live.get("updated", 0):
                 record.update(state=hooked["state"], event=hooked.get("event"), updated=hooked["updated"])
         else:

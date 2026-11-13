@@ -2,9 +2,9 @@ import re
 from importlib import resources
 from pathlib import Path
 
-from claude_gopher.config import Config
+from claude_gopher.config import Config, gopher_features, gopher_proactivity
 
-CONTEXTS = ("all", "gopher", "project", "resources", "archive", "close", "reopen", "inbox", "tui-summary", "setup")
+CONTEXTS = ("all", "gopher", "project", "resources", "archive", "close", "reopen", "inbox", "tui-summary", "tui-detail", "setup")
 SESSION_CONTEXTS = {"gopher": ("all", "gopher"), "project": ("all", "project")}
 CONTEXT_LIMIT = 10_000
 PLACEHOLDER = re.compile(r"\{\{(\w+)\}\}")
@@ -27,6 +27,7 @@ def variables(config: Config, project: str | None) -> dict[str, str]:
         "closed_dir": config.closed_dir,
         "agent_dir": config.agent_dir,
         "prompts_dir": config.prompts_dir,
+        "reference_dir": config.reference_dir,
         "tmp_dir": config.root / "tmp",
         "project": project or "<project>",
         "project_dir": config.projects_dir / (project or "<project>"),
@@ -44,6 +45,10 @@ def assemble(config: Config, context: str, project: str | None = None) -> str:
         raise ValueError(f"unknown context {context!r}; one of: {', '.join(CONTEXTS)}")
     values = variables(config, project)
     text = render(core_text(context), values).rstrip()
+    if context == "gopher":
+        sections = [f"gopher-proactivity-{gopher_proactivity(config)}"]
+        sections += [f"gopher-feature-{feature}" for feature in gopher_features(config)]
+        text += "".join("\n\n" + render(core_text(name), values).rstrip() for name in sections)
     site = site_text(config, context).strip()
     if site:
         text += "\n\n## Site\n\n" + render(site, values)

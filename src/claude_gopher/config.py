@@ -12,6 +12,7 @@ DEFAULT_PATHS = {
     "agent_dir": "gopher",
     "state_dir": "tmp/gopher",
     "prompts_dir": "prompts",
+    "reference_dir": "reference",
 }
 DEFAULT_CLAUDE_SESSIONS_DIR = "~/.claude/sessions"
 ROOT_CONFIG = "config.toml"
@@ -30,6 +31,7 @@ class Config:
     agent_dir: Path
     state_dir: Path
     prompts_dir: Path
+    reference_dir: Path
     claude_sessions_dir: Path
     settings: dict = field(default_factory=dict, compare=False)
 
@@ -113,3 +115,48 @@ def load_config(root: Path) -> Config:
         ).expanduser(),
         settings=raw,
     )
+
+
+PROACTIVITY_LEVELS = ("quiet", "nudge", "proactive")
+DEFAULT_PROACTIVITY = "quiet"
+GOPHER_FEATURES = ("notebook", "changelog")
+
+
+def gopher_proactivity(config: Config) -> str:
+    level = config.settings.get("gopher", {}).get("proactivity", DEFAULT_PROACTIVITY)
+    if level not in PROACTIVITY_LEVELS:
+        raise ConfigError(f"[gopher] proactivity must be one of {', '.join(PROACTIVITY_LEVELS)}, not {level!r}")
+    return level
+
+
+def gopher_features(config: Config) -> list[str]:
+    features = config.settings.get("gopher", {}).get("features", [])
+    unknown = [f for f in features if f not in GOPHER_FEATURES]
+    if not isinstance(features, list) or unknown:
+        raise ConfigError(f"[gopher] features must be a list drawn from {', '.join(GOPHER_FEATURES)}")
+    return features
+
+
+def set_gopher_setting(root: Path, key: str, value: str) -> None:
+    path = root / ROOT_CONFIG
+    lines = path.read_text().splitlines() if path.is_file() else []
+    entry = f"{key} = {json.dumps(value)}"
+    section = None
+    header_at = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped.strip("[]").strip()
+            if section == "gopher":
+                header_at = i
+            continue
+        if section == "gopher" and stripped.split("=", 1)[0].strip() == key and "=" in stripped:
+            lines[i] = entry
+            break
+    else:
+        if header_at is None:
+            lines += ["", "[gopher]", entry] if lines else ["[gopher]", entry]
+        else:
+            lines.insert(header_at + 1, entry)
+    path.write_text("\n".join(lines) + "\n")
+    tomllib.loads(path.read_text())

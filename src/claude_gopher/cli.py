@@ -9,21 +9,21 @@ from pathlib import Path
 
 from claude_gopher.checkouts import add_checkout, all_checkouts, owners, project_dirs, read_checkouts, remove_checkout
 from claude_gopher.inbox import PROMPT, RESET_SOURCES, START, Tracker, add_item, inbox_context, inbox_notice, unread, wake_reason
-from claude_gopher.config import ROOT_CONFIG, ConfigError, load_config, load_registry, resolve_root, save_registry
+from claude_gopher.config import (
+    PROACTIVITY_LEVELS, ROOT_CONFIG, ConfigError, gopher_proactivity, load_config, load_registry, resolve_root,
+    save_registry, set_gopher_setting,
+)
 from claude_gopher.projects import list_projects, project_info
 from claude_gopher.prompt import CONTEXTS, assemble, is_gopher_session, session_context
 from claude_gopher.roots import RootError, check_name, check_target, create_project, create_root, register_root
-from claude_gopher.registry import read_registry
+from claude_gopher.overview import current_sessions, project_overview
 from claude_gopher.setup import SetupIO, launch_interview, run_setup
-from claude_gopher import workon
+from claude_gopher import launch, rename, workon
 from claude_gopher.state import (
     apply_event,
     hook_settings,
-    list_sessions,
     location_label,
     resolve_project,
-    merge_sessions,
-    pane_locations,
 )
 
 
@@ -100,7 +100,11 @@ def cmd_hook_context(args) -> int:
             return 0
         notice = None
         if is_gopher:
-            text = session_context(config, "gopher", None)
+            prompt_file = os.environ.get(launch.PROMPT_ENV)
+            if prompt_file and Path(prompt_file).is_file():
+                text = f"# Gopher\n\nYou are Gopher; your instructions are in your system prompt (from `{prompt_file}`)."
+            else:
+                text = session_context(config, "gopher", None)
             notice = "gopher: Gopher session"
         elif project:
             text = session_context(config, "project", project)
@@ -234,6 +238,32 @@ def cmd_workon_agent(args) -> int:
     return 0
 
 
+def cmd_launch(args) -> int:
+    config = root_config(args)
+    if args.exec_agent:
+        launch.exec_agent(config, args.passthrough)
+        return 0
+    for line in launch.launch(config, args.session):
+        print(f"gopher: {line}")
+    return 0
+
+
+def cmd_tui(args) -> int:
+    from claude_gopher import tui  # deferred: textual import is slow and only the TUI needs it
+
+    tui.run(root_config(args))
+    return 0
+
+
+def cmd_proactivity(args) -> int:
+    config = root_config(args)
+    if args.level:
+        set_gopher_setting(config.root, "proactivity", args.level)
+        config = load_config(config.root)
+    print(gopher_proactivity(config))
+    return 0
+
+
 def cmd_workon_term(args) -> int:
     config = root_config(args)
     ui = workon.TtyUI()
@@ -320,6 +350,20 @@ def cmd_project_new(args) -> int:
     return 0
 
 
+def cmd_project_rename(args) -> int:
+    config = root_config(args)
+    report = rename.rename_project(config, args.old, args.new, windows=not args.no_windows)
+    print(f"renamed {args.old} -> {args.new}")
+    for where in report.windows:
+        print(f"  tmux window {where} renamed")
+    if report.sessions:
+        print(f"  {len(report.sessions)} session record(s) updated; running agents keep GOPHER_PROJECT={args.old}"
+              " and resolve the project from their checkout until relaunched")
+    for warning in report.warnings:
+        print(f"  warning: {warning}", file=sys.stderr)
+    return 0
+
+
 def cmd_checkout_add(args) -> int:
     config = root_config(args)
     path = Path(args.path).expanduser().resolve()
@@ -368,17 +412,6 @@ def format_age(seconds: float) -> str:
     return f"{seconds // 86400}d"
 
 
-def current_sessions(config, prune: bool = True) -> list[dict]:
-    registry = read_registry(config.claude_sessions_dir)
-    locations = pane_locations()
-    panes = None if registry is not None or locations is None else set(locations)
-    hook_records = list_sessions(config.sessions_dir, panes, prune=prune and registry is None)
-    sessions = merge_sessions(hook_records, registry, config.projects_dir)
-    for session in sessions:
-        session["location"] = (locations or {}).get(session.get("pane") or "")
-    return sessions
-
-
 def print_table(header: tuple, rows: list[tuple], show_header: bool = True) -> None:
     shown = [header, *rows] if show_header else rows
     widths = [max(len(str(row[i])) for row in shown) for i in range(len(header) - 1)]
@@ -411,11 +444,7 @@ def truncate(text: str, width: int) -> str:
 
 def cmd_projects(args) -> int:
     config = root_config(args)
-    projects = list_projects(config.projects_dir, current_sessions(config))
-    for project in projects:
-        items = unread(Path(project["path"]))
-        project["inbox"] = {"unread": len(items), "wake": sum(item.wake for item in items)}
-    projects.sort(key=lambda p: (not any(s.get("state") == "waiting" for s in p["sessions"]), p["name"]))
+    projects = project_overview(config)
     if args.json:
         print(json.dumps(projects, indent=2))
         return 0
@@ -472,12 +501,27 @@ def build_parser() -> argparse.ArgumentParser:
     setup.add_argument("-y", "--yes", action="store_true", help="install hooks without asking")
     setup.set_defaults(func=cmd_setup)
 
+    launcher = sub.add_parser("launch", help="start the Gopher agent's tmux session and link its window at index 0")
+    launcher.add_argument("--session", help="tmux session to link into (default: the current one)")
+    launcher.add_argument("--exec-agent", action="store_true", help=argparse.SUPPRESS)
+    launcher.set_defaults(func=cmd_launch, passthrough=[])
+
+    sub.add_parser("tui", help="dashboard of every project: agents, inbox, PRs, summary").set_defaults(func=cmd_tui)
+    proactivity = sub.add_parser("proactivity", help="show or set how proactive Gopher is ([gopher] proactivity)")
+    proactivity.add_argument("level", nargs="?", choices=PROACTIVITY_LEVELS)
+    proactivity.set_defaults(func=cmd_proactivity)
+
     project = sub.add_parser("project", help="manage projects").add_subparsers(dest="project_command", required=True)
     project_new = project.add_parser("new", help="create a project")
     project_new.add_argument("name")
     project_new.add_argument("--summary", default="")
     project_new.add_argument("--checkout", action="append", default=[], help="checkout path owned by the project")
     project_new.set_defaults(func=cmd_project_new)
+    project_rename = project.add_parser("rename", help="rename a project: directory, STATUS heading, gopher state, tmux windows")
+    project_rename.add_argument("old")
+    project_rename.add_argument("new")
+    project_rename.add_argument("--no-windows", action="store_true", help="leave tmux window names alone")
+    project_rename.set_defaults(func=cmd_project_rename)
 
     checkout = sub.add_parser("checkout", help="manage project checkouts").add_subparsers(dest="checkout_command", required=True)
     checkout_add = checkout.add_parser("add", help="give a project a checkout")
@@ -577,12 +621,12 @@ def main(argv: list[str] | None = None) -> int:
         argv, tail = argv[:split], argv[split + 1 :]
     args, extra = parser.parse_known_args(argv)
     if tail is not None:
-        if getattr(args, "func", None) in (cmd_workon_agent, cmd_workon_term):
+        if getattr(args, "func", None) in (cmd_workon_agent, cmd_workon_term, cmd_launch):
             args.passthrough = tail
         elif getattr(args, "func", None) is cmd_workon_complete:
             args.words = tail
         else:
-            parser.error("'--' is only accepted by workon agent, workon term, and workon complete")
+            parser.error("'--' is only accepted by launch, workon agent, workon term, and workon complete")
     if extra:
         if getattr(args, "func", None) is not cmd_inbox_add or any(word.startswith("-") for word in extra):
             parser.error(f"unrecognized arguments: {' '.join(extra)}")

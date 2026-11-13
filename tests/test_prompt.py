@@ -73,7 +73,11 @@ def test_hook_context_by_session_kind(root, tmp_path, monkeypatch, capsys):
     assert "# Project agent: alpha" in run_hook(monkeypatch, capsys, str(tmp_path / "co" / "src"))
     assert "# Project agent: alpha" in run_hook(monkeypatch, capsys, str(config.projects_dir / "alpha" / "notes"))
     gopher = run_hook(monkeypatch, capsys, str(config.agent_dir))
-    assert "# Gopher\n" in gopher and "Project agent" not in gopher
+    assert "# Gopher\n" in gopher and "# Project agent" not in gopher
+    prompt_file = tmp_path / "gopher-prompt.md"
+    prompt_file.write_text("full prompt")
+    pointer = run_hook(monkeypatch, capsys, str(config.agent_dir), GOPHER_PROMPT_FILE=str(prompt_file))
+    assert "system prompt" in pointer and str(prompt_file) in pointer and "## Routing" not in pointer
 
 
 def test_hook_context_ignores_missing_root(tmp_path, monkeypatch, capsys):

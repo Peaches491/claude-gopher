@@ -57,7 +57,7 @@ def test_registry_round_trip(tmp_path):
 def test_create_root_skeleton_and_commit(tmp_path):
     root = tmp_path / "root"
     create_root(root)
-    for name in ("config.toml", ".gitignore", "prompts/README.md", "projects", "archived", "closed", "gopher", "tmp/gopher"):
+    for name in ("config.toml", ".gitignore", "prompts/README.md", "projects", "archived", "closed", "gopher", "reference", "tmp/gopher"):
         assert (root / name).exists(), name
     assert not (root / "gitignore").exists()
     log = subprocess.run(["git", "-C", str(root), "log", "--oneline"], capture_output=True, text=True).stdout

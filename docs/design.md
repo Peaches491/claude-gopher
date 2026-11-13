@@ -67,6 +67,8 @@ $GOPHER_HOME (~/workon)
   archived/<p>/
   closed/<p>/
   gopher/           Gopher agent dir (<agent_dir>): prompt.md, journal/, pending/, STATUS.md
+  reference/        shared reference library (<reference_dir>): playbooks, processes, key docs;
+                    README.md index; curated by Gopher, read by project agents
   tmp/              regenerable, gitignored: tmp/<p>/, tmp/gopher/ (state dir)
   .gitignore        tmp/
 ```
@@ -109,7 +111,11 @@ merges them).
 - Register it in the machine registry under `NAME` (prompted; default the directory's basename).
 - Make it the registry's `default` if it is the first root; otherwise ask (or obey the flag).
 
-Projects inside a root are created with `gopher project new <name>`.
+Projects inside a root are created with `gopher project new <name>` and renamed with
+`gopher project rename <old> <new>`: it moves the directory, fixes the `STATUS.md` heading, carries
+the inbox tracker and session records over to the new name, and renames tmux windows named after
+the project. Running agents keep the old `GOPHER_PROJECT`; the hooks ignore a `GOPHER_PROJECT` that
+names no project and fall back to the checkout, so they keep working until relaunched.
 
 ### Setting up a root (`gopher setup`)
 
@@ -349,8 +355,23 @@ wake: false
 
 - Agent dir `<agent_dir>`: `prompt.md` (system/launch prompt), `journal/<date>.md` (everything you
   said, where it went), `pending/` (wake requests awaiting idle), `STATUS.md`.
-- Launched by `gopher launch` as `claude --name gopher --permission-mode auto ...` in the `gopher`
-  tmux session, so peers can message it by name.
+- Prompt: core `prompts/gopher.md` (role, voice, what Gopher owns and must not do, routing,
+  fan-outs tracked in `pending/`, tickets/Slack/Docs, end-of-day and weekly rituals) plus
+  `gopher-proactivity-<level>.md` for `[gopher] proactivity` (`quiet` default, `nudge`,
+  `proactive`; `gopher proactivity [level]` or TUI `P` sets it and tells the running Gopher) and
+  one `gopher-feature-<name>.md` per `[gopher] features` entry (`notebook`: daily
+  `notebook/YYYY-MM-DD.md`; `changelog`: shipped things in `changelog.md`). Site-specific facts
+  (default ticket project) go in the root's `prompts/gopher.md`. `gopher launch` writes the
+  assembled text to `<state_dir>/gopher-prompt.md` and passes it with
+  `--append-system-prompt-file` (no 10k hook-context cap, survives `/clear`); the SessionStart hook
+  then only points at it.
+- Launched by `gopher launch` as `claude --model sonnet --name gopher --permission-mode auto ...`
+  (model from `[gopher] model`, default `sonnet`; `""` leaves it to Claude Code's default) in the `gopher`
+  tmux session, so peers can message it by name. `gopher launch [--session S]` is idempotent: it
+  creates the session if missing, then links its window at index 0 of `S` (default: the current
+  session), refusing if another window holds index 0. `examples/tmux.conf` runs it from a
+  `client-attached` hook. Project agents keep Claude's generated names; `gopher agents` shows the
+  name to address.
 - On start: reads frontmatter + `human/STATUS.md` of every active project, and the state files.
 - Routing: one or more projects; confident -> deliver and report one line; unsure -> menu.
 - "Tell X now": target idle (state file / `ListAgents`) -> `SendMessage`; busy -> inbox item with
@@ -371,16 +392,56 @@ wake: false
   deep dive; `t` jump to the project's tmux window.
 - Sends to Gopher with `tmux send-keys` (no Enter for prefill), since scripts cannot use
   cross-session messaging.
+- First pass (2026-11-12, `src/claude_gopher/tui.py`): polls `project_overview` every 5 s (no
+  inotify). Each project is a 5-row block (herdr-sidebar style) with a thick left bar coloured by
+  its most urgent agent. Row 1: name and age, with the project's frontmatter state right-aligned.
+  Row 2: envelope and unread inbox count (`!` for wake items) and resource links (OSC 8), with one
+  aggregate agent status right-aligned (most urgent agent's icon and label, `+N` for more agents;
+  no pane locations). Rows 3-5: the summary. Resource files carry optional frontmatter (`state`,
+  `merged`, `stack`; see the resources prompt): the card hides closed/resolved/done tickets and
+  closed PRs, shows merged PRs for 24 h with a check mark (a date-only `merged` counts until the
+  end of the next day), and collapses each stack to its top visible PR with the stack size in
+  parentheses. Files without frontmatter count as open. The expanded view lists every resource
+  with its state.
+- Ranking (`overview.project_rank`, shared with `gopher projects`) follows the card colours:
+  yellow (an agent needs input, or status `waiting-review`), then red (an agent needs login, or
+  `blocked`), then green (`active`), then grey (anything else, e.g. `closing`). Agent state only
+  lifts a project into yellow or red. Within a colour: most urgent agent first (needs input,
+  needs login, done, working, background, idle), then longest-waiting first for needs input and
+  login, most recent first otherwise; projects with no agent by STATUS.md date. The left bar and
+  the right-aligned status use the status colour; "done" agents show green.
+- "Done" is acknowledged when a tmux client keeps the agent's pane focused for 5 s after it
+  finished (the TUI samples `list-clients` on each 5 s poll), or with `x`. Acks live in
+  `<state_dir>/tui/acks.json`; hook records carry `finished` (set on `Stop`, cleared by the next
+  non-idle event). Known gap: an outer client with the popup open still counts as viewing the pane
+  under the popup.
+- Keys: `j`/`k` move, `g`/`G` top/bottom, `l`/`enter` expand, `t` jump to the agent
+  (`switch-client`, best pane first), `x` mark done as seen, `m`/`M` file an inbox item (`M` with
+  wake) from a one-line prompt, `r` one-line Haiku summary (cached in `tui/summaries.json`, `~`
+  prefix, dropped once STATUS.md is newer), `ctrl+r` refresh, `q` quit. `i` (prefill
+  `[project: X] ` into Gopher's pane) and `R` (deep dive via Gopher) are only offered when the TUI
+  runs in the Gopher window.
+- Expanded view: live facts (agents with name, state, location; unread inbox items; PR/ticket
+  links; checkouts), a multi-line Haiku summary (`tui-detail` prompt, cached in
+  `tui/details.json` like the one-liner), then STATUS.md rendered as Markdown. `j`/`k` scroll,
+  `h`/`esc` back; it returns to the list after 90 s without a key.
+- Direction: the TUI grows quick actions run by Haiku (`claude -p`) for small, well-scoped jobs,
+  and hands anything multi-step to Gopher (e.g. "summarize this Slack thread, open a ticket, and
+  send it as an inbox item to a project").
 
 ### 6. tmux integration
 
 - The Gopher window is owned by a dedicated `gopher` session and linked into the main session at
   index 0 (`link-window -s gopher:0 -t 0:0`): one window, one Claude process, visible in both places.
-- `prefix g` toggles a popup attached to the `gopher` session; the same key inside the popup detaches:
+- `prefix g` (replacing tmux 3.8's default floating-pane `move` table) toggles a popup attached to the `gopher` session; the same key inside the popup detaches:
   ```
-  bind g if -F '#{==:#{session_name},gopher}' 'detach-client' \
-    'display-popup -E -w 90% -h 90% "TMUX= tmux attach -t gopher"'
+  bind g {
+    if -F '#{==:#{session_name},gopher}' { detach-client } {
+      run-shell -b 'tmux set -w -t "#{window_id}" window-style dim=40; tmux set -g @gopher_popup_client "#{client_name}"; tmux set -g @gopher_popup_pane "#{pane_id}"; tmux display-popup -c "#{client_name}" -E -s bg=terminal -S bg=terminal -w 90% -h 90% "TMUX= tmux attach -t gopher; tmux -S #{socket_path} set -wu -t #{window_id} window-style; tmux -S #{socket_path} set -gu @gopher_popup_client; tmux -S #{socket_path} set -gu @gopher_popup_pane"'
+    }
+  }
   ```
+  The window behind the popup is dimmed while it is open (tmux has no built-in backdrop for popups).
   (No-op, or select-window, when already on window 0.)
 - While the popup is open the window resizes to the popup and Claude Code redraws; harmless.
 - tmux-resurrect does not understand linked windows and may restore Gopher as two windows.
@@ -411,8 +472,9 @@ Scripts, not agents, do the destructive parts; agents/Gopher only propose them.
    agentic interview. **(done)** `gopher clean` (health checks) later.
 2. State hook. **(done)** Then switch the window glyph hook to it.
 3. Inbox hooks (inject + Stop wake), tested against one project. **(done)**
-4. Gopher prompt + `gopher launch` + popup binding.
-5. TUI.
+4. Gopher prompt + `gopher launch` + popup binding. **(built; session and popup run live, window 0
+   link not yet confirmed by the user)**
+5. TUI. **(first pass)** `gopher tui`, run in the left pane by `gopher launch`.
 6. `gopher archive|close|reopen`.
 7. `gopher workon` (agent, term, source, where, link, unlink), absorbing `workon.py` /
    `runagent` from `~/ai_setup`. **(done)** Then migrate `~/ai_setup` data into `~/workon`.
@@ -422,8 +484,10 @@ Each step is usable on its own; 1-3 already help without Gopher (you can drop no
 
 ## Open questions / to verify
 
-- `crossSessionInbound` defaults with auto-mode receivers: do messages from Gopher get held for
-  approval? Test before relying on `SendMessage`.
+- ~~`crossSessionInbound` with auto-mode receivers~~: verified 2026-11-12 (Claude Code 2.1.323).
+  Auto-mode sender to auto-mode receiver is delivered without approval and the receiver can reply.
+  Messages are held for approval only when the sender's permission mode differs from the
+  receiver's, so Gopher and project agents must share a mode (both `auto` by default).
 - Whether AskUserQuestion fires PermissionRequest or Notification (needed for the "waiting" state).
 - Stop-hook wake when the agent's turn ended with a question to you in plain text: the deferral rule
   should handle it, but verify it doesn't steamroll the conversation.
