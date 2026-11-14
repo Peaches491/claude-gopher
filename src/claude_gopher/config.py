@@ -137,6 +137,32 @@ def gopher_features(config: Config) -> list[str]:
     return features
 
 
+ACTION_CWDS = ("checkout", "project")
+
+
+@dataclass(frozen=True)
+class CustomAction:
+    key: str
+    label: str
+    command: str
+    cwd: str = "checkout"
+
+
+def tui_actions(config: Config) -> list[CustomAction]:
+    raw = config.settings.get("tui", {}).get("actions", [])
+    if not isinstance(raw, list):
+        raise ConfigError("[[tui.actions]] must be an array of tables")
+    actions = []
+    for entry in raw:
+        if not isinstance(entry, dict) or not all(isinstance(entry.get(k), str) and entry.get(k) for k in ("key", "label", "command")):
+            raise ConfigError("each [[tui.actions]] needs string key, label, and command")
+        cwd = entry.get("cwd", "checkout")
+        if cwd not in ACTION_CWDS:
+            raise ConfigError(f"[[tui.actions]] cwd must be one of {', '.join(ACTION_CWDS)}, not {cwd!r}")
+        actions.append(CustomAction(entry["key"], entry["label"], entry["command"], cwd))
+    return actions
+
+
 def set_gopher_setting(root: Path, key: str, value: str) -> None:
     path = root / ROOT_CONFIG
     lines = path.read_text().splitlines() if path.is_file() else []

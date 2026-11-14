@@ -429,6 +429,31 @@ wake: false
   and hands anything multi-step to Gopher (e.g. "summarize this Slack thread, open a ticket, and
   send it as an inbox item to a project").
 
+### 5b. Sidebar (2026-11-13)
+
+- `gopher workon term` lays a project window out as two panes: the TUI as a full-height left
+  column (20%) and the agent (80%). `gopher workon sidebar <project>|--all [--replace]` adds the
+  sidebar to open windows (`--replace` closes their shell/editor panes, never other programs).
+- `gopher tui` pins the pane's own project (agent in the pane, then cwd, then window name;
+  `--project` overrides) in a header: summary, cached Haiku line, each agent's state and name,
+  inbox and links, and buttons with hotkeys: custom actions (`[[tui.actions]]` in the root
+  `config.toml`: key, label, shell command, run in the first checkout or the project directory,
+  output shown in the header), `b` inbox list, `n` new inbox item, `u` ask the agent beside it to refresh
+  STATUS.md, `e` edit `human/STATUS.md` in a popup. The inbox list: `enter` prefills the agent
+  beside it with `Inbox item inbox/<file>: `, `x` moves the item to `inbox/read/`, `l` shows it.
+  Other projects follow as compact two-row blocks. Without a pinned project it is the full
+  dashboard.
+- Keys on a highlighted project: `enter`/`t` jump to it, `l` expand, `g` popup on Gopher with
+  `[project: X] ` prefilled, `i` popup on that project's agent with `[from: <pinned>] `
+  prefilled (no live agent: the inbox prompt), `m`/`M` inbox item, `home`/`end` top/bottom.
+- Popups (`popup.py`, `gopher popup gopher|agent`, also behind `prefix g`): dim the window
+  behind, record the outer client, origin and target panes in `@gopher_popup_*`. Agent popups
+  attach through a temporary grouped session (`gopher-peek-*`, destroyed when the popup closes)
+  so the outer client's current window does not move, and zoom the agent pane meanwhile. A popup
+  opened with prefilled text closes itself when that agent receives the prompt (the state hook's
+  `UserPromptSubmit` detaches the popup clients).
+- The Gopher window is just the Gopher agent.
+
 ### 6. tmux integration
 
 - The Gopher window is owned by a dedicated `gopher` session and linked into the main session at

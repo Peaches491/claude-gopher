@@ -1,6 +1,7 @@
 import datetime
 import json
 import os
+import shlex
 import subprocess
 import time
 from pathlib import Path
@@ -9,12 +10,17 @@ from rich.style import Style
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
-from textual.widgets import Footer, Input, ListItem, ListView, Markdown, Static
+from textual.widgets import Button, Footer, Input, ListItem, ListView, Markdown, Static
 
-from claude_gopher.config import PROACTIVITY_LEVELS, Config, gopher_proactivity, load_config, set_gopher_setting
-from claude_gopher.inbox import add_item, unread
+from claude_gopher.config import (
+    PROACTIVITY_LEVELS, Config, ConfigError, CustomAction, gopher_proactivity, load_config, set_gopher_setting,
+    tui_actions,
+)
+from claude_gopher import popup
+from claude_gopher.checkouts import read_checkouts
+from claude_gopher.inbox import add_item, mark_read, unread
 from claude_gopher.launch import write_prompt
 from claude_gopher.overview import (
     CREDS, DONE, Acks, Resource, effective_state, most_urgent, open_tickets, project_overview,
@@ -24,17 +30,16 @@ from claude_gopher.projects import read_frontmatter
 from claude_gopher.prompt import assemble
 from claude_gopher.registry import BACKGROUND
 from claude_gopher.state import IDLE, LEADING_GLYPHS, WAITING, WORKING, resolve_project
+from claude_gopher.workon import status_editor_command
 
 REFRESH_SECONDS = 5
 DWELL_SECONDS = 5
 DETAIL_TIMEOUT = 90
 SUMMARY_MODEL = "haiku"
 SUMMARY_TIMEOUT = 120
-GOPHER_SESSION = "gopher"
-POPUP_CLIENT_OPTION = "@gopher_popup_client"
-POPUP_PANE_OPTION = "@gopher_popup_pane"
-POPUP_POLL_SECONDS = 0.5
-SHELLS = ("watch", "zsh", "bash", "sh", "fish")
+ACTION_TIMEOUT = 60
+PINNED_ACTIONS = ("custom", "toggle_inbox", "note", "refresh_status", "edit_human")
+REFRESH_STATUS_PROMPT = "Please refresh STATUS.md (frontmatter and body) so it reflects where this project stands now."
 STATE_ORDER = {WAITING: 0, CREDS: 0, DONE: 0, WORKING: 1, BACKGROUND: 1, IDLE: 2}
 STATE_STYLE = {
     WAITING: "bold yellow", CREDS: "bold red", DONE: "bold green", WORKING: "green", BACKGROUND: "green", IDLE: "dim",
@@ -172,33 +177,17 @@ def tmux(*argv: str) -> subprocess.CompletedProcess:
     return subprocess.run(["tmux", *argv], capture_output=True, text=True)
 
 
-def gopher_pane(own_pane: str | None) -> str | None:
+def agent_pane_beside(own_pane: str | None) -> str | None:
     if not own_pane:
         return None
     listing = tmux("list-panes", "-t", own_pane, "-F", "#{pane_id}\t#{pane_current_command}")
     if listing.returncode != 0:
         return None
-    others = [line.split("\t") for line in listing.stdout.splitlines() if not line.startswith(f"{own_pane}\t")]
-    for pane, command in others:
-        if command not in SHELLS:
+    for line in listing.stdout.splitlines():
+        pane, _, command = line.partition("\t")
+        if pane != own_pane and command == "claude":
             return pane
-    return others[0][0] if others else None
-
-
-def popup_clients() -> tuple[str | None, list[str]]:
-    outer = tmux("show", "-gv", POPUP_CLIENT_OPTION)
-    listing = tmux("list-clients", "-F", "#{client_name}\t#{client_session}")
-    if outer.returncode != 0 or not outer.stdout.strip() or listing.returncode != 0:
-        return None, []
-    nested = [line.split("\t")[0] for line in listing.stdout.splitlines() if line.endswith(f"\t{GOPHER_SESSION}")]
-    return outer.stdout.strip(), nested
-
-
-def popup_origin() -> str | None:
-    result = tmux("show", "-gv", POPUP_PANE_OPTION)
-    if result.returncode != 0:
-        return None
-    return result.stdout.strip() or None
+    return None
 
 
 def pane_project(config: Config, pane: str, projects: dict[str, dict]) -> str | None:
@@ -215,33 +204,8 @@ def pane_project(config: Config, pane: str, projects: dict[str, dict]) -> str | 
     return window if window in projects else None
 
 
-def jump_to(pane: str) -> None:
-    outer, nested = popup_clients()
-    if outer and nested:
-        tmux("switch-client", "-c", outer, "-t", pane)
-        for client in nested:
-            tmux("detach-client", "-t", client)
-    else:
-        tmux("switch-client", "-t", pane)
-
-
-def gopher_agent_pane() -> str | None:
-    listing = tmux("list-panes", "-s", "-t", f"={GOPHER_SESSION}:", "-F", "#{pane_id}\t#{pane_current_command}")
-    if listing.returncode != 0:
-        return None
-    panes = [line.split("\t") for line in listing.stdout.splitlines() if "\t" in line]
-    return next((pane for pane, command in panes if command == "claude"), None)
-
-
 def next_level(level: str) -> str:
     return PROACTIVITY_LEVELS[(PROACTIVITY_LEVELS.index(level) + 1) % len(PROACTIVITY_LEVELS)]
-
-
-def in_gopher_window(own_pane: str | None) -> bool:
-    if not own_pane:
-        return False
-    listing = tmux("list-panes", "-s", "-t", f"={GOPHER_SESSION}:", "-F", "#{pane_id}")
-    return listing.returncode == 0 and own_pane in listing.stdout.split()
 
 
 def focused_panes() -> dict[str, str]:
@@ -269,6 +233,21 @@ class FocusTracker:
             if s.get("attention") == DONE and s.get("pane") in focus_since
             and now - max(focus_since[s["pane"]], s["finished"]) >= self.dwell
         ]
+
+
+def run_custom_action(config: Config, project: dict, action: CustomAction) -> str:
+    project_dir = Path(project["path"])
+    if action.cwd == "project":
+        cwd = project_dir
+    else:
+        checkouts = read_checkouts(project_dir)
+        if not checkouts:
+            raise RuntimeError(f"{project['name']} has no checkouts")
+        cwd = checkouts[0]
+    env = {**os.environ, "GOPHER_ROOT": str(config.root), "GOPHER_PROJECT": project["name"], "GOPHER_PROJECT_DIR": str(project_dir)}
+    result = subprocess.run(action.command, shell=True, cwd=cwd, env=env, capture_output=True, text=True, timeout=ACTION_TIMEOUT)
+    output = (result.stdout + result.stderr).strip()
+    return output or f"(no output, exit {result.returncode})"
 
 
 def title_text(project: dict) -> Text:
@@ -336,22 +315,53 @@ def status_body(project_dir: Path) -> str:
     return read_frontmatter(path.read_text())[1].strip()
 
 
+def pinned_text(project: dict, cached: str | None) -> Text:
+    text = title_text(project)
+    text.append("  ")
+    text.append_text(project_state_text(project))
+    text.append(f"\n{project['summary'] or '(no summary)'}")
+    if cached:
+        text.append(f"\n~ {cached}", style="italic")
+    for session in sorted(project["sessions"], key=lambda s: STATE_ORDER.get(effective_state(s), 3)):
+        text.append("\n")
+        text.append_text(state_text(effective_state(session) or "?"))
+        text.append(f"  {session.get('name') or '?'}", style="dim")
+    facts = facts_text(project)
+    if facts:
+        text.append("\n")
+        text.append_text(facts)
+    return text
+
+
+def inbox_line(item) -> Text:
+    text = Text()
+    text.append(f"{INBOX_ICON}{'!' if item.wake else ' '} ", style="bold" if item.wake else "")
+    text.append(f"{item.sender} {item.created[5:16].replace('T', ' ')}  ", style="dim")
+    text.append(item.body.splitlines()[0] if item.body else "")
+    text.no_wrap = True
+    text.overflow = "ellipsis"
+    return text
+
+
 class ProjectCard(ListItem):
-    def __init__(self, project: dict, cached: str | None):
-        super().__init__(classes=f"card {state_class(project)}")
+    def __init__(self, project: dict, cached: str | None, compact: bool = False):
+        super().__init__(classes=f"card {'compact' if compact else ''} {state_class(project)}")
         self.project_name = project["name"]
         self.project = project
         self.cached = cached
+        self.compact = compact
 
     def parts(self) -> dict[str, Text]:
         project = self.project
-        return {
+        parts = {
             "name": title_text(project),
             "pstate": project_state_text(project),
             "facts": facts_text(project),
             "agents": agents_text(project["sessions"]),
-            "body": body_text(project, self.cached),
         }
+        if not self.compact:
+            parts["body"] = body_text(project, self.cached)
+        return parts
 
     def compose(self) -> ComposeResult:
         parts = self.parts()
@@ -361,13 +371,52 @@ class ProjectCard(ListItem):
         with Horizontal(classes="row"):
             yield Static(parts["facts"], classes="facts")
             yield Static(parts["agents"], classes="agents")
-        yield Static(parts["body"], classes="body")
+        if not self.compact:
+            yield Static(parts["body"], classes="body")
 
     def update_card(self, project: dict, cached: str | None) -> None:
         self.project, self.cached = project, cached
         self.remove_class(*STATE_CLASSES).add_class(state_class(project))
         for name, text in self.parts().items():
             self.query_one(f".{name}", Static).update(text)
+
+
+class InboxRow(ListItem):
+    def __init__(self, item):
+        super().__init__(Static(inbox_line(item)))
+        self.item = item
+
+
+class InboxList(ListView):
+    BINDINGS = [
+        Binding("j", "cursor_down", "Down", show=False),
+        Binding("k", "cursor_up", "Up", show=False),
+        Binding("x", "app.inbox_read", "Mark read"),
+        Binding("l", "app.inbox_show", "Show"),
+        Binding("escape,b", "app.toggle_inbox", "Close inbox"),
+    ]
+
+    def selected_item(self):
+        row = self.highlighted_child
+        return row.item if isinstance(row, InboxRow) else None
+
+
+class PinnedHeader(Vertical):
+    def __init__(self, actions: list[CustomAction]):
+        super().__init__()
+        self.actions = actions
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="pinned-text")
+        with Horizontal(id="pinned-buttons"):
+            for index, custom in enumerate(self.actions):
+                yield Button(f"{custom.key} {custom.label}", action=f"app.custom({index})", compact=True)
+            yield Button("b Inbox", action="app.toggle_inbox", compact=True)
+            yield Button("n Note", action="app.note", compact=True)
+            yield Button("u Refresh", action="app.refresh_status", compact=True)
+            yield Button("e Human", action="app.edit_human", compact=True)
+        yield InboxList(id="pinned-inbox")
+        yield Static(id="pinned-output")
 
 
 class DetailScreen(Screen):
@@ -427,6 +476,21 @@ class DetailScreen(Screen):
             self.dismiss()
 
 
+class TextScreen(ModalScreen[None]):
+    BINDINGS = [Binding("escape,q,h", "dismiss", "Close")]
+
+    def __init__(self, text: str):
+        super().__init__()
+        self.text = text
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll():
+            yield Static(self.text)
+
+    def action_dismiss(self) -> None:
+        self.dismiss(None)
+
+
 class MessageScreen(ModalScreen[str | None]):
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
@@ -448,8 +512,9 @@ class MessageScreen(ModalScreen[str | None]):
 class GopherTUI(App):
     TITLE = "gopher"
     CSS = """
-    ListView { height: 1fr; }
+    #projects { height: 1fr; }
     ListItem.card { height: 5; margin-bottom: 1; padding: 0 1; border-left: thick ansi_bright_black; }
+    ListItem.card.compact { height: 2; }
     ListItem.card.pstate-active { border-left: thick ansi_green; }
     ListItem.card.pstate-blocked { border-left: thick ansi_red; }
     ListItem.card.pstate-waiting-review { border-left: thick ansi_yellow; }
@@ -459,80 +524,100 @@ class GopherTUI(App):
     ListItem.card .facts { width: 1fr; padding-left: 2; }
     ListItem.card .agents { width: auto; padding-left: 1; }
     ListItem.card .body { height: 3; padding-left: 2; }
+    PinnedHeader { height: auto; max-height: 60%; padding: 0 1; border-bottom: solid ansi_bright_black; }
+    #pinned-buttons { height: 1; margin: 1 0 0 0; }
+    #pinned-buttons Button { margin-right: 1; }
+    #pinned-inbox { height: auto; max-height: 10; display: none; }
+    #pinned-inbox.open { display: block; }
+    #pinned-output { height: auto; max-height: 15; display: none; }
+    #pinned-output.open { display: block; }
     DetailScreen VerticalScroll { padding: 0 1; }
-    MessageScreen { align: center middle; }
-    MessageScreen > Static { width: 80%; }
-    MessageScreen > Input { width: 80%; }
+    MessageScreen, TextScreen { align: center middle; }
+    MessageScreen > Static, MessageScreen > Input { width: 90%; }
+    TextScreen > VerticalScroll { width: 90%; height: 80%; border: round ansi_bright_black; padding: 0 1; }
     """
     BINDINGS = [
         Binding("j", "move(1)", "Down", show=False),
         Binding("k", "move(-1)", "Up", show=False),
-        Binding("g", "edge(0)", "Top", show=False),
-        Binding("G", "edge(1)", "Bottom", show=False),
+        Binding("home", "edge(0)", "Top", show=False),
+        Binding("end", "edge(1)", "Bottom", show=False),
         Binding("l", "expand", "Expand"),
-        Binding("i", "address", "To Gopher"),
-        Binding("t", "jump", "Jump"),
-        Binding("x", "mark_seen", "Seen"),
+        Binding("t", "jump", "Jump", show=False),
+        Binding("g", "gopher", "Gopher"),
+        Binding("i", "agent", "Agent"),
         Binding("m", "message(False)", "Message"),
         Binding("M", "message(True)", "Wake msg", show=False),
-        Binding("r", "summarize", "Haiku line"),
-        Binding("R", "deep_dive", "Deep dive"),
+        Binding("x", "mark_seen", "Seen", show=False),
+        Binding("r", "summarize", "Haiku line", show=False),
+        Binding("b", "toggle_inbox", "Inbox", show=False),
+        Binding("n", "note", "Note", show=False),
+        Binding("u", "refresh_status", "Refresh", show=False),
+        Binding("e", "edit_human", "Human", show=False),
         Binding("P", "proactivity", "Proactivity", show=False),
         Binding("ctrl+r", "refresh", "Refresh", show=False),
         Binding("q", "quit", "Quit"),
     ]
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, pinned: str | None = None):
         super().__init__(ansi_color=True)
         self.theme = "ansi-dark"
         self.config = config
+        self.pinned = pinned
         self.cache = SummaryCache(config)
         self.details = SummaryCache(config, "details")
         self.acks = Acks(config)
         self.focus = FocusTracker()
         self.projects: dict[str, dict] = {}
         self.own_pane = os.environ.get("TMUX_PANE")
-        self.in_gopher = in_gopher_window(self.own_pane)
-        self.origin: str | None = None
+        self.actions: list[CustomAction] = []
+        self.action_problems: list[str] = []
+        if pinned:
+            self.load_custom_actions()
+
+    def load_custom_actions(self) -> None:
+        try:
+            configured = tui_actions(self.config)
+        except ConfigError as error:
+            self.action_problems.append(str(error))
+            return
+        taken = {key.strip() for binding in self.BINDINGS for key in binding.key.split(",")}
+        for custom in configured:
+            if custom.key in taken:
+                self.action_problems.append(f"[[tui.actions]] {custom.label}: key {custom.key!r} is already taken")
+                continue
+            taken.add(custom.key)
+            self.bind(custom.key, f"custom({len(self.actions)})", description=custom.label, show=False)
+            self.actions.append(custom)
 
     def compose(self) -> ComposeResult:
-        yield ListView()
+        if self.pinned:
+            yield PinnedHeader(self.actions)
+        yield ListView(id="projects")
         yield Footer()
 
     def on_mount(self) -> None:
+        for problem in self.action_problems:
+            self.notify(problem, severity="warning")
         self.action_refresh()
         self.set_interval(REFRESH_SECONDS, self.action_refresh)
-        self.set_interval(POPUP_POLL_SECONDS, self.check_origin)
-
-    def check_origin(self) -> None:
-        self.run_worker(self.read_origin, thread=True, exclusive=True, group="origin")
-
-    def read_origin(self) -> None:
-        origin = popup_origin()
-        if origin == self.origin:
-            return
-        self.origin = origin
-        if origin and (name := pane_project(self.config, origin, self.projects)):
-            self.call_from_thread(self.highlight, name)
-
-    def highlight(self, name: str) -> None:
-        while len(self.screen_stack) > 1:
-            self.pop_screen()
-        names = [card.project_name for card in self.cards()]
-        if name in names:
-            self.query_one(ListView).index = names.index(name)
 
     def check_action(self, action: str, parameters: tuple) -> bool | None:
-        if action in ("address", "deep_dive"):
-            return self.in_gopher
+        if action in PINNED_ACTIONS:
+            return bool(self.pinned)
         return True
 
+    def project_list(self) -> ListView:
+        return self.query_one("#projects", ListView)
+
     def cards(self) -> list[ProjectCard]:
-        return list(self.query_one(ListView).query(ProjectCard))
+        return list(self.project_list().query(ProjectCard))
 
     def selected(self) -> dict | None:
-        card = self.query_one(ListView).highlighted_child
+        card = self.project_list().highlighted_child
         return self.projects.get(card.project_name) if isinstance(card, ProjectCard) else None
+
+    def pinned_project(self) -> dict | None:
+        return self.projects.get(self.pinned) if self.pinned else None
 
     def action_refresh(self) -> None:
         self.run_worker(self.load, thread=True, exclusive=True, group="refresh")
@@ -548,31 +633,59 @@ class GopherTUI(App):
         self.call_from_thread(self.show, projects)
 
     async def show(self, projects: list[dict]) -> None:
-        view = self.query_one(ListView)
-        current = self.selected()
         self.projects = {p["name"]: p for p in projects}
+        if self.pinned:
+            self.show_pinned()
+        listed = [p for p in projects if p["name"] != self.pinned]
+        view = self.project_list()
+        current = self.selected()
         cards = self.cards()
-        if [card.project_name for card in cards] == [p["name"] for p in projects]:
-            for card, project in zip(cards, projects):
+        if [card.project_name for card in cards] == [p["name"] for p in listed]:
+            for card, project in zip(cards, listed):
                 card.update_card(project, self.cache.get(project))
             return
         await view.clear()
-        await view.extend(ProjectCard(project, self.cache.get(project)) for project in projects)
-        names = [p["name"] for p in projects]
+        await view.extend(ProjectCard(p, self.cache.get(p), compact=bool(self.pinned)) for p in listed)
+        names = [p["name"] for p in listed]
         view.index = names.index(current["name"]) if current and current["name"] in names else (0 if names else None)
 
+    def show_pinned(self) -> None:
+        project = self.pinned_project()
+        if not project:
+            self.query_one("#pinned-text", Static).update(Text(f"{self.pinned}: no such project", style="red"))
+            return
+        self.query_one("#pinned-text", Static).update(pinned_text(project, self.cache.get(project)))
+        inbox = self.query_one(InboxList)
+        if inbox.has_class("open"):
+            self.fill_inbox()
+
+    def fill_inbox(self) -> None:
+        inbox = self.query_one(InboxList)
+        items = unread(Path(self.pinned_project()["path"]))
+        names = [row.item.path.name for row in inbox.query(InboxRow)]
+        if names == [item.path.name for item in items]:
+            return
+        index = inbox.index
+        inbox.clear()
+        inbox.extend(InboxRow(item) for item in items)
+        if items:
+            inbox.index = min(index or 0, len(items) - 1)
+
     def on_list_view_selected(self, event: ListView.Selected) -> None:
-        self.action_expand()
+        if isinstance(event.item, InboxRow):
+            self.work_on_item(event.item.item)
+        else:
+            self.action_jump()
 
     def action_move(self, step: int) -> None:
-        view = self.query_one(ListView)
+        view = self.project_list()
         if step > 0:
             view.action_cursor_down()
         else:
             view.action_cursor_up()
 
     def action_edge(self, end: int) -> None:
-        view = self.query_one(ListView)
+        view = self.project_list()
         if len(view):
             view.index = len(view) - 1 if end else 0
 
@@ -580,44 +693,50 @@ class GopherTUI(App):
         if project := self.selected():
             self.push_screen(DetailScreen(self, project))
 
-    def send_to_gopher(self, text: str, submit: bool) -> bool:
-        pane = gopher_pane(self.own_pane)
-        if not pane:
-            self.notify("Gopher pane not found in this window", severity="warning")
-            return False
-        tmux("send-keys", "-t", pane, "-l", text)
-        if submit:
-            tmux("send-keys", "-t", pane, "Enter")
-        tmux("select-pane", "-t", pane)
-        return True
-
-    def action_address(self) -> None:
-        if project := self.selected():
-            self.send_to_gopher(f"[project: {project['name']}] ", submit=False)
-
-    def action_deep_dive(self) -> None:
-        if project := self.selected():
-            self.send_to_gopher(
-                f"[project: {project['name']}] Deep dive: ask its idle agent to refresh STATUS.md and give me a summary.",
-                submit=True,
-            )
-
     def action_jump(self) -> None:
         project = self.selected()
         if not project:
             return
         pane = jump_target(project["sessions"])
-        if not pane:
-            self.notify(f"{project['name']} has no agent in tmux", severity="warning")
+        if pane:
+            popup.jump_to(pane)
             return
-        jump_to(pane)
+        windows = [w for w, name in project_window_ids(project["name"])]
+        if windows:
+            popup.jump_to(windows[0])
+        else:
+            self.notify(f"{project['name']} has no open window", severity="warning")
+
+    def open_popup(self, kind: str, target: str | None, prefill: str) -> None:
+        if not self.own_pane:
+            self.notify("not running in tmux", severity="warning")
+            return
+        try:
+            popup.open_popup(kind, self.own_pane, target=target, prefill=prefill)
+        except RuntimeError as error:
+            self.notify(str(error), severity="warning")
+
+    def action_gopher(self) -> None:
+        project = self.selected() or self.pinned_project()
+        self.open_popup("gopher", None, f"[project: {project['name']}] " if project else "")
+
+    def action_agent(self) -> None:
+        project = self.selected()
+        if not project:
+            return
+        pane = jump_target(project["sessions"])
+        if not pane:
+            self.action_message(False)
+            return
+        origin = f"[from: {self.pinned}] " if self.pinned else ""
+        self.open_popup("agent", pane, origin)
 
     def action_proactivity(self) -> None:
         level = next_level(gopher_proactivity(self.config))
         set_gopher_setting(self.config.root, "proactivity", level)
         self.config = load_config(self.config.root)
         write_prompt(self.config)
-        pane = gopher_agent_pane()
+        pane = popup.gopher_agent_pane()
         if pane:
             tmux("send-keys", "-t", pane, "-l", f"Proactivity is now {level}; follow the {level} rules from `gopher prompt gopher`.")
             tmux("send-keys", "-t", pane, "Enter")
@@ -626,14 +745,14 @@ class GopherTUI(App):
             self.notify(f"Proactivity: {level} (Gopher not running; applies at next launch)")
 
     def action_mark_seen(self) -> None:
-        if project := self.selected():
+        if project := self.selected() or self.pinned_project():
             done = [s["session_id"] for s in project["sessions"] if s.get("attention") == DONE]
             if done:
                 self.acks.ack(done)
                 self.action_refresh()
 
-    def action_message(self, wake: bool) -> None:
-        project = self.selected()
+    def action_message(self, wake: bool, project: dict | None = None) -> None:
+        project = project or self.selected()
         if not project:
             return
 
@@ -645,8 +764,83 @@ class GopherTUI(App):
 
         self.push_screen(MessageScreen(project["name"], wake), file)
 
+    def action_note(self) -> None:
+        if project := self.pinned_project():
+            self.action_message(False, project)
+
+    def action_toggle_inbox(self) -> None:
+        if not self.pinned_project():
+            return
+        inbox = self.query_one(InboxList)
+        if inbox.has_class("open"):
+            inbox.remove_class("open")
+            self.project_list().focus()
+            return
+        self.fill_inbox()
+        inbox.add_class("open")
+        inbox.focus()
+
+    def inbox_item(self):
+        return self.query_one(InboxList).selected_item()
+
+    def work_on_item(self, item) -> None:
+        pane = agent_pane_beside(self.own_pane)
+        if not pane:
+            self.notify("no agent pane in this window", severity="warning")
+            return
+        tmux("send-keys", "-t", pane, "-l", f"Inbox item inbox/{item.path.name}: ")
+        tmux("select-pane", "-t", pane)
+
+    def action_inbox_read(self) -> None:
+        if item := self.inbox_item():
+            mark_read(item.path)
+            self.fill_inbox()
+            self.action_refresh()
+
+    def action_inbox_show(self) -> None:
+        if item := self.inbox_item():
+            self.push_screen(TextScreen(f"{item.sender}, {item.created}{' (wake)' if item.wake else ''}\n\n{item.body}"))
+
+    def action_custom(self, index: int) -> None:
+        project = self.pinned_project()
+        if not project or not 0 <= index < len(self.actions):
+            return
+        custom = self.actions[index]
+        output = self.query_one("#pinned-output", Static)
+        output.update(Text(f"Running {custom.label}...", style="dim italic"))
+        output.add_class("open")
+        self.run_worker(lambda: self.load_custom(project, custom), thread=True, exclusive=True, group="custom")
+
+    def load_custom(self, project: dict, custom: CustomAction) -> None:
+        try:
+            text = run_custom_action(self.config, project, custom)
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+            text = f"{custom.label} failed: {error}"
+        self.call_from_thread(self.query_one("#pinned-output", Static).update, Text(text))
+
+    def action_refresh_status(self) -> None:
+        pane = agent_pane_beside(self.own_pane)
+        if not pane:
+            self.notify("no agent pane in this window", severity="warning")
+            return
+        tmux("send-keys", "-t", pane, "-l", REFRESH_STATUS_PROMPT)
+        tmux("send-keys", "-t", pane, "Enter")
+        self.notify("Asked the agent to refresh STATUS.md")
+
+    def action_edit_human(self) -> None:
+        project = self.pinned_project()
+        if not project or not self.own_pane:
+            return
+        project_dir = Path(project["path"])
+        (project_dir / "human").mkdir(exist_ok=True)
+        command = shlex.join(status_editor_command(project_dir))
+        subprocess.Popen(
+            ["tmux", "display-popup", "-E", "-t", self.own_pane, "-d", str(project_dir), "-w", "80%", "-h", "80%", command],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+        )
+
     def action_summarize(self) -> None:
-        if project := self.selected():
+        if project := self.selected() or self.pinned_project():
             self.notify(f"Summarizing {project['name']}...")
             self.run_worker(lambda: self.refresh_summary(project), thread=True, group="summary")
 
@@ -660,5 +854,25 @@ class GopherTUI(App):
         self.call_from_thread(self.action_refresh)
 
 
-def run(config: Config) -> None:
-    GopherTUI(config).run()
+def project_window_ids(project: str) -> list[tuple[str, str]]:
+    listing = tmux("list-windows", "-a", "-F", "#{window_id}\t#{window_name}")
+    if listing.returncode != 0:
+        return []
+    found = []
+    for line in listing.stdout.splitlines():
+        window, _, name = line.partition("\t")
+        if LEADING_GLYPHS.sub("", name) == project:
+            found.append((window, project))
+    return found
+
+
+def detect_pinned(config: Config) -> str | None:
+    pane = os.environ.get("TMUX_PANE")
+    if not pane:
+        return None
+    projects = {p["name"]: p for p in project_overview(config)}
+    return pane_project(config, pane, projects)
+
+
+def run(config: Config, project: str | None = None) -> None:
+    GopherTUI(config, pinned=project or detect_pinned(config)).run()

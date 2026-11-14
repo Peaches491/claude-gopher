@@ -115,7 +115,7 @@ def test_launch_creates_session_and_links_at_zero(config, monkeypatch):
     assert report == ["started gopher session (@9)", "linked into main:0"]
     assert ("0", "@9", "gopher") in fake.sessions["main"]
     sent = [c[-2] for c in fake.calls if c[0] == "send-keys"]
-    assert any(s.endswith(" tui") for s in sent) and any("launch --exec-agent" in s for s in sent)
+    assert not any(s.endswith(" tui") for s in sent) and any("launch --exec-agent" in s for s in sent)
 
 
 def test_launch_is_idempotent(config, monkeypatch):

@@ -1,5 +1,6 @@
 import fnmatch
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -268,12 +269,14 @@ def send(pane: str, command: str) -> None:
     tmux("send-keys", "-t", pane, command, "Enter")
 
 
+AGENT_WIDTH = "80%"
+
+
 def term_layout(config: Config, ui, project: str, checkout: Path | None, agent: Agent, passthrough: list[str]) -> list[str] | None:
     if not os.environ.get("TMUX"):
         raise WorkonError("term must run inside tmux")
     directory = str(workdir(config, project, checkout))
     base = os.environ["TMUX_PANE"]
-    in_current_pane = True
     if int(tmux("display-message", "-p", "-t", base, "#{window_panes}")) > 1:
         choice = ui.menu("This window has other panes", ["Replace this window's panes", "Open a new window", "Abort"])
         if choice == "Abort":
@@ -282,21 +285,62 @@ def term_layout(config: Config, ui, project: str, checkout: Path | None, agent: 
             tmux("kill-pane", "-a", "-t", base)
         else:
             base = tmux("new-window", "-P", "-F", "#{pane_id}", "-n", project, "-c", directory)
-            in_current_pane = False
-    project_dir = config.projects_dir / project
-    (project_dir / "human").mkdir(exist_ok=True)
-    agent_pane = tmux("split-window", "-h", "-l", "70%", "-t", base, "-c", directory, "-P", "-F", "#{pane_id}")
-    editor_pane = tmux("split-window", "-v", "-b", "-l", "30%", "-t", base, "-c", str(project_dir), "-P", "-F", "#{pane_id}")
-    send(editor_pane, shlex.join(status_editor_command(project_dir)))
+    agent_pane = tmux("split-window", "-h", "-l", AGENT_WIDTH, "-t", base, "-c", directory, "-P", "-F", "#{pane_id}")
     agent_cmd = ["gopher", "--root", str(config.root), "workon", "agent", "--agent", agent.name, *target_words(project, checkout)]
     if passthrough:
         agent_cmd += ["--", *passthrough]
     send(agent_pane, shlex.join(agent_cmd))
+    send(base, sidebar_command(config, project))
     tmux("select-pane", "-t", agent_pane)
-    if in_current_pane and os.environ.get(EVAL_ENV):
-        return source_lines(config, project, checkout)
-    send(base, shlex.join(["gopher", "--root", str(config.root), "workon", "source", *target_words(project, checkout)]))
     return None
+
+
+def sidebar_command(config: Config, project: str) -> str:
+    return shlex.join(["gopher", "--root", str(config.root), "tui", "--project", project])
+
+
+SIDEBAR_WIDTH = "20%"
+SIDEBAR_COMMANDS = ("python3", "python", "gopher")
+REPLACEABLE = ("zsh", "bash", "sh", "fish", "nvim", "vim", "vi")
+
+
+def project_windows(config: Config, only: str | None = None) -> list[tuple[str, str]]:
+    projects = set(all_projects(config))
+    found = []
+    for line in tmux("list-windows", "-a", "-F", "#{window_id}\t#{window_name}").splitlines():
+        window, _, name = line.partition("\t")
+        name = re.sub(r"^[^\w(\[]+\s*", "", name)
+        if name in projects and (only is None or name == only):
+            found.append((window, name))
+    return found
+
+
+def add_sidebar(config: Config, window: str, project: str, replace: bool = False) -> str:
+    panes = [line.split("\t") for line in tmux("list-panes", "-t", window, "-F", "#{pane_id}\t#{pane_current_command}").splitlines()]
+    if any(command in SIDEBAR_COMMANDS for _, command in panes):
+        return f"{project}: already has a sidebar"
+    agent = next((pane for pane, command in panes if command == "claude"), None)
+    if not agent:
+        return f"{project}: no agent pane; skipped"
+    sidebar = tmux(
+        "split-window", "-h", "-b", "-f", "-l", SIDEBAR_WIDTH, "-t", agent,
+        "-c", str(config.projects_dir / project), "-P", "-F", "#{pane_id}",
+    )
+    send(sidebar, sidebar_command(config, project))
+    closed, kept = [], []
+    if replace:
+        for pane, command in panes:
+            if pane == agent:
+                continue
+            if command in REPLACEABLE:
+                tmux("kill-pane", "-t", pane)
+                closed.append(command)
+            else:
+                kept.append(command)
+    tmux("select-pane", "-t", agent)
+    note = f"; closed {', '.join(closed)}" if closed else ""
+    note += f"; kept {', '.join(kept)} (still running)" if kept else ""
+    return f"{project}: sidebar added{note}"
 
 
 def run_lines(lines: list[str]) -> None:
@@ -311,9 +355,10 @@ def project_summary(config: Config, project: str) -> str:
 
 ACTIONS = {
     "agent": "start an agent for a project in this terminal",
-    "term": "lay out this tmux window: STATUS editor, shell, and agent",
+    "term": "lay out this tmux window: the gopher sidebar and the agent",
     "source": "cd to a project's checkout and activate it (needs gopher shell-init)",
     "where": "list projects and their checkouts",
+    "sidebar": "add the gopher sidebar to open project windows (--replace closes their shell/editor panes)",
     "link": "add the current checkout to a project",
     "unlink": "remove the current checkout from a project",
 }

@@ -6,6 +6,7 @@ import time
 import pytest
 
 from claude_gopher import overview, tui
+from claude_gopher.checkouts import add_checkout
 from claude_gopher.config import load_config
 from claude_gopher.roots import create_project, create_root
 
@@ -88,13 +89,6 @@ def test_summary_input_includes_both_statuses(config):
     assert "<STATUS.md>" in text and "<human/STATUS.md>\nmy notes" in text
 
 
-def test_gopher_pane_skips_self_and_shells(monkeypatch):
-    listing = "%1\tpython3\n%2\tzsh\n%3\tclaude\n"
-    monkeypatch.setattr(tui, "tmux", lambda *argv: type("R", (), {"returncode": 0, "stdout": listing})())
-    assert tui.gopher_pane("%1") == "%3"
-    assert tui.gopher_pane(None) is None
-
-
 def test_card_text():
     beta = project("beta", unread=2, wake=1)
     beta["state"] = "waiting-review"
@@ -105,43 +99,162 @@ def test_card_text():
     assert tui.body_text(beta, "cached").plain == "~ cached"
 
 
-def test_app_shows_projects_and_addresses_gopher(config, monkeypatch):
-    rows = [project("beta", [{"state": "waiting", "pane": "%9", "updated": 1, "location": None}], unread=1, wake=1), project("alpha")]
-    monkeypatch.setattr(tui, "project_overview", lambda config: rows)
-    sent = []
-    monkeypatch.setattr(tui, "gopher_pane", lambda own: "%5")
-    monkeypatch.setattr(tui, "tmux", lambda *argv: sent.append(argv))
-    monkeypatch.setattr(tui, "in_gopher_window", lambda own: True)
-    monkeypatch.setattr(tui, "focused_panes", lambda: {})
-    monkeypatch.setattr(tui, "popup_clients", lambda: (None, []))
-    origins = iter([None, "%9"])
-    monkeypatch.setattr(tui, "popup_origin", lambda: next(origins, "%9"))
-    app = tui.GopherTUI(config)
+def test_agent_pane_beside_finds_claude(monkeypatch):
+    listing = "%1\tpython3\n%2\tzsh\n%3\tclaude\n"
+    monkeypatch.setattr(tui, "tmux", lambda *argv: Done(listing))
+    assert tui.agent_pane_beside("%1") == "%3"
+    assert tui.agent_pane_beside("%3") is None
+    assert tui.agent_pane_beside(None) is None
 
-    async def drive():
+
+def drive_app(app, steps):
+    async def run():
         async with app.run_test() as pilot:
             await app.workers.wait_for_complete()
             await pilot.pause()
-            assert [card.project_name for card in app.cards()] == ["beta", "alpha"]
-            assert app.selected()["name"] == "beta"
-            await pilot.press("j")
-            assert app.selected()["name"] == "alpha"
-            await pilot.press("i")
-            assert ("send-keys", "-t", "%5", "-l", "[project: alpha] ") in sent
-            await pilot.press("k", "t")
-            assert ("switch-client", "-t", "%9") in sent
-            await pilot.press("G")
-            assert app.selected()["name"] == "alpha"
-            await pilot.press("g")
-            assert app.selected()["name"] == "beta"
-            await pilot.press("j")
-            app.origin = None
-            app.check_origin()
-            await app.workers.wait_for_complete()
-            await pilot.pause()
-            assert app.selected()["name"] == "beta"
+            await steps(app, pilot)
 
-    asyncio.run(drive())
+    asyncio.run(run())
+
+
+def stub_tmux(monkeypatch):
+    sent = []
+    monkeypatch.setattr(tui, "tmux", lambda *argv: sent.append(argv) or Done())
+    monkeypatch.setattr(tui, "focused_panes", lambda: {})
+    return sent
+
+
+def test_dashboard_keys(config, monkeypatch):
+    rows = [project("beta", [{"state": "waiting", "pane": "%9", "updated": 1, "location": None}], unread=1, wake=1), project("alpha")]
+    monkeypatch.setattr(tui, "project_overview", lambda config: rows)
+    stub_tmux(monkeypatch)
+    jumps, popups = [], []
+    monkeypatch.setattr(tui.popup, "jump_to", jumps.append)
+    monkeypatch.setattr(tui.popup, "open_popup", lambda kind, origin, target=None, prefill="", client=None: popups.append((kind, target, prefill)))
+    monkeypatch.setenv("TMUX_PANE", "%1")
+    app = tui.GopherTUI(config)
+
+    async def steps(app, pilot):
+        assert [card.project_name for card in app.cards()] == ["beta", "alpha"]
+        assert not app.query(tui.PinnedHeader)
+        await pilot.press("enter")
+        assert jumps == ["%9"]
+        await pilot.press("i")
+        assert popups[-1] == ("agent", "%9", "")
+        await pilot.press("j", "g")
+        assert popups[-1] == ("gopher", None, "[project: alpha] ")
+        await pilot.press("end")
+        assert app.selected()["name"] == "alpha"
+        await pilot.press("home")
+        assert app.selected()["name"] == "beta"
+
+    drive_app(app, steps)
+
+
+def test_sidebar_pins_project_and_works_inbox(config, monkeypatch):
+    alpha_dir = config.projects_dir / "alpha"
+    item = tui.add_item(alpha_dir, "please look at the flaky test", sender="gopher")
+    pinned = project("alpha", [{"state": "working", "pane": "%3", "updated": 2, "location": None}], unread=1)
+    pinned["path"] = str(alpha_dir)
+    rows = [pinned, project("beta", [{"state": "idle", "pane": "%9", "updated": 1, "location": None}])]
+    monkeypatch.setattr(tui, "project_overview", lambda config: rows)
+    sent = stub_tmux(monkeypatch)
+    monkeypatch.setattr(tui, "agent_pane_beside", lambda own: "%3")
+    popups = []
+    monkeypatch.setattr(tui.popup, "open_popup", lambda kind, origin, target=None, prefill="", client=None: popups.append((kind, target, prefill)))
+    monkeypatch.setenv("TMUX_PANE", "%2")
+    app = tui.GopherTUI(config, pinned="alpha")
+
+    async def steps(app, pilot):
+        assert [card.project_name for card in app.cards()] == ["beta"]
+        assert all(card.compact for card in app.cards())
+        assert "alpha" in str(app.query_one("#pinned-text", tui.Static).render())
+        await pilot.press("i")
+        assert popups[-1] == ("agent", "%9", "[from: alpha] ")
+        await pilot.press("b")
+        await pilot.pause()
+        inbox = app.query_one(tui.InboxList)
+        assert inbox.has_class("open") and len(inbox) == 1
+        await pilot.press("enter")
+        assert ("send-keys", "-t", "%3", "-l", f"Inbox item inbox/{item.name}: ") in sent
+        inbox.focus()
+        await pilot.press("x")
+        await pilot.pause()
+        assert not item.exists() and (alpha_dir / "inbox" / "read" / item.name).exists()
+        await pilot.press("escape")
+        assert not inbox.has_class("open")
+        await pilot.press("u")
+        assert ("send-keys", "-t", "%3", "-l", tui.REFRESH_STATUS_PROMPT) in sent
+
+    drive_app(app, steps)
+
+
+ACTIONS_TOML = """
+[[tui.actions]]
+key = "s"
+label = "Where"
+command = "pwd"
+
+[[tui.actions]]
+key = "w"
+label = "Who"
+command = "echo $GOPHER_PROJECT"
+cwd = "project"
+
+[[tui.actions]]
+key = "j"
+label = "Clash"
+command = "true"
+"""
+
+
+def write_actions(config):
+    path = config.root / "config.toml"
+    path.write_text(path.read_text() + ACTIONS_TOML)
+    return load_config(config.root)
+
+
+def test_run_custom_action_uses_checkout_or_project_dir(config, tmp_path):
+    checkout = tmp_path / "co"
+    checkout.mkdir()
+    loaded = write_actions(config)
+    where, who, _ = tui.tui_actions(loaded)
+    alpha = {"name": "alpha", "path": str(config.projects_dir / "alpha")}
+    with pytest.raises(RuntimeError, match="no checkouts"):
+        tui.run_custom_action(loaded, alpha, where)
+    add_checkout(config.projects_dir, "alpha", checkout)
+    assert tui.run_custom_action(loaded, alpha, where) == str(checkout)
+    assert tui.run_custom_action(loaded, alpha, who) == "alpha"
+
+
+def test_tui_actions_rejects_bad_entries(config):
+    path = config.root / "config.toml"
+    path.write_text(path.read_text() + '\n[[tui.actions]]\nkey = "s"\nlabel = "x"\ncommand = "true"\ncwd = "home"\n')
+    with pytest.raises(tui.ConfigError, match="cwd"):
+        tui.tui_actions(load_config(config.root))
+
+
+def test_sidebar_binds_custom_actions(config, monkeypatch):
+    loaded = write_actions(config)
+    pinned = project("alpha", [])
+    pinned["path"] = str(config.projects_dir / "alpha")
+    monkeypatch.setattr(tui, "project_overview", lambda config: [pinned])
+    stub_tmux(monkeypatch)
+    ran = []
+    monkeypatch.setattr(tui, "run_custom_action", lambda config, project, action: ran.append(action.label) or "done")
+    app = tui.GopherTUI(loaded, pinned="alpha")
+
+    async def steps(app, pilot):
+        labels = [str(button.label) for button in app.query("#pinned-buttons Button")]
+        assert labels[:2] == ["s Where", "w Who"] and "j Clash" not in labels
+        assert any("already taken" in problem for problem in app.action_problems)
+        await pilot.press("w")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert ran == ["Who"]
+        assert "done" in str(app.query_one("#pinned-output", tui.Static).render())
+
+    drive_app(app, steps)
 
 
 def test_project_rank_tiers_then_recency():
@@ -216,22 +329,6 @@ def test_focus_tracker_needs_dwell_after_finish():
 class Done:
     def __init__(self, stdout="", returncode=0):
         self.stdout, self.returncode = stdout, returncode
-
-
-def test_jump_from_popup_switches_outer_client_and_closes_popup(monkeypatch):
-    calls = []
-    replies = {"show": Done("/dev/pts/26\n"), "list-clients": Done("/dev/pts/26\t0\n/dev/pts/90\tgopher\n")}
-    monkeypatch.setattr(tui, "tmux", lambda *argv: calls.append(argv) or replies.get(argv[0], Done()))
-    tui.jump_to("%9")
-    assert ("switch-client", "-c", "/dev/pts/26", "-t", "%9") in calls
-    assert ("detach-client", "-t", "/dev/pts/90") in calls
-
-
-def test_jump_without_popup_switches_current_client(monkeypatch):
-    calls = []
-    monkeypatch.setattr(tui, "tmux", lambda *argv: calls.append(argv) or (Done("", 1) if argv[0] == "show" else Done()))
-    tui.jump_to("%9")
-    assert calls[-1] == ("switch-client", "-t", "%9")
 
 
 def test_next_level_cycles():

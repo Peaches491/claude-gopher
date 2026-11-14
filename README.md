@@ -63,10 +63,26 @@ Source `examples/tmux.conf` from your tmux config for the `prefix g` popup and t
 `gopher launch` whenever a client attaches. Gopher runs `claude --model sonnet` by default; set
 `[gopher] model` in the root's `config.toml` to change it.
 
-TUI keys: `j`/`k` move, `l`/`enter` expand (Haiku summary + STATUS.md), `t` jump to the agent, `x`
-mark finished work as seen, `m`/`M` file an inbox item (`M` wakes the agent), `r` one-line Haiku
-summary, `P` cycle Gopher's proactivity, `ctrl+r` refresh, `q` quit. In the Gopher window, `i` addresses the project to Gopher and
-`R` asks Gopher for a deep dive.
+`gopher workon term` lays a project window out as the sidebar (left) and the agent;
+`gopher workon sidebar --all` adds the sidebar to open windows.
+
+Sidebar keys: `j`/`k` move, `enter` jump to the project, `l` expand, `g` message Gopher about it,
+`i` message its agent (both in a popup that closes when you send), `m`/`M` file an inbox item, `x`
+mark finished work seen, `r` one-line Haiku summary, `P` cycle Gopher's proactivity, `q` quit.
+For the pinned project: `b` inbox, `n` new inbox item, `u` refresh STATUS, `e` edit
+`human/STATUS.md`, plus any custom actions from the root `config.toml`. Each one is a header
+button and a hotkey that runs a shell command for the pinned project and shows its output:
+
+```toml
+[[tui.actions]]
+key = "s"
+label = "Status"
+command = "git status --short"
+cwd = "checkout"   # "checkout" (the project's first checkout, default) or "project"
+```
+
+The command gets `GOPHER_ROOT`, `GOPHER_PROJECT`, and `GOPHER_PROJECT_DIR` in its environment. A
+key that clashes with a built-in key is skipped with a warning.
 
 ## Prompts
 

@@ -66,6 +66,14 @@ def add_item(
     return path
 
 
+def mark_read(path: Path) -> Path:
+    read_dir = path.parent / "read"
+    read_dir.mkdir(exist_ok=True)
+    target = read_dir / path.name
+    path.rename(target)
+    return target
+
+
 class Tracker:
     def __init__(self, state_dir: Path, project: str, session_id: str):
         self.directory = state_dir / "inbox" / project

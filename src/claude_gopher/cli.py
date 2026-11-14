@@ -18,7 +18,7 @@ from claude_gopher.prompt import CONTEXTS, assemble, is_gopher_session, session_
 from claude_gopher.roots import RootError, check_name, check_target, create_project, create_root, register_root
 from claude_gopher.overview import current_sessions, project_overview
 from claude_gopher.setup import SetupIO, launch_interview, run_setup
-from claude_gopher import launch, rename, workon
+from claude_gopher import launch, popup, rename, workon
 from claude_gopher.state import (
     apply_event,
     hook_settings,
@@ -39,6 +39,8 @@ def cmd_hook_state(args) -> int:
             return 0
         config = load_config(root)
         apply_event(payload, config.sessions_dir, config.projects_dir, dict(os.environ))
+        if payload.get("hook_event_name") == "UserPromptSubmit" and os.environ.get("TMUX"):
+            popup.autoclose_after_submit(os.environ.get("TMUX_PANE"))
     except Exception:
         log_error(config, "hook state")
     return 0
@@ -251,7 +253,18 @@ def cmd_launch(args) -> int:
 def cmd_tui(args) -> int:
     from claude_gopher import tui  # deferred: textual import is slow and only the TUI needs it
 
-    tui.run(root_config(args))
+    tui.run(root_config(args), project=args.project)
+    return 0
+
+
+def cmd_popup(args) -> int:
+    origin = args.origin or os.environ.get("TMUX_PANE")
+    if not origin:
+        raise RootError("gopher popup must run inside tmux or get --origin")
+    try:
+        popup.open_popup(args.kind, origin, target=args.target, prefill=args.prefill, client=args.client)
+    except RuntimeError as error:
+        raise RootError(str(error)) from error
     return 0
 
 
@@ -272,6 +285,20 @@ def cmd_workon_term(args) -> int:
     lines = workon.term_layout(config, ui, project, checkout, agent, args.passthrough)
     if lines:
         print("\n".join(lines))
+    return 0
+
+
+def cmd_workon_sidebar(args) -> int:
+    config = root_config(args)
+    if not os.environ.get("TMUX"):
+        raise RootError("gopher workon sidebar must run inside tmux")
+    if not args.all and not args.project:
+        raise RootError("name a project or pass --all")
+    windows = workon.project_windows(config, None if args.all else args.project)
+    if not windows:
+        print("no open project windows matched")
+    for window, project in windows:
+        print(workon.add_sidebar(config, window, project, replace=args.replace))
     return 0
 
 
@@ -506,7 +533,16 @@ def build_parser() -> argparse.ArgumentParser:
     launcher.add_argument("--exec-agent", action="store_true", help=argparse.SUPPRESS)
     launcher.set_defaults(func=cmd_launch, passthrough=[])
 
-    sub.add_parser("tui", help="dashboard of every project: agents, inbox, PRs, summary").set_defaults(func=cmd_tui)
+    tui_parser = sub.add_parser("tui", help="project sidebar/dashboard: agents, inbox, PRs, summary")
+    tui_parser.add_argument("--project", help="pin this project in the header (default: the pane's project)")
+    tui_parser.set_defaults(func=cmd_tui)
+    popup_parser = sub.add_parser("popup", help="open a tmux popup on Gopher or a project's agent pane")
+    popup_parser.add_argument("kind", choices=("gopher", "agent"))
+    popup_parser.add_argument("--target", help="agent pane id (for kind agent)")
+    popup_parser.add_argument("--origin", help="pane the popup is opened from (default: $TMUX_PANE)")
+    popup_parser.add_argument("--client", help="tmux client to show it on (default: the one viewing --origin)")
+    popup_parser.add_argument("--prefill", default="", help="text to type into the agent; Enter there closes the popup")
+    popup_parser.set_defaults(func=cmd_popup)
     proactivity = sub.add_parser("proactivity", help="show or set how proactive Gopher is ([gopher] proactivity)")
     proactivity.add_argument("level", nargs="?", choices=PROACTIVITY_LEVELS)
     proactivity.set_defaults(func=cmd_proactivity)
@@ -570,6 +606,11 @@ def build_parser() -> argparse.ArgumentParser:
         if action != "source":
             target.add_argument("--agent", help="agent from the root config (default: claude)")
         target.set_defaults(func=func, passthrough=[])
+    sidebar = workon_sub.add_parser("sidebar", help=workon.ACTIONS["sidebar"])
+    sidebar.add_argument("project", nargs="?")
+    sidebar.add_argument("--all", action="store_true", help="every open project window")
+    sidebar.add_argument("--replace", action="store_true", help="also close the window's shell and editor panes")
+    sidebar.set_defaults(func=cmd_workon_sidebar)
     where = workon_sub.add_parser("where", help=workon.ACTIONS["where"])
     where.add_argument("project", nargs="?")
     where.set_defaults(func=cmd_workon_where)

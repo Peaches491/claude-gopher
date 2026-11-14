@@ -97,12 +97,9 @@ def gopher_window() -> str:
 
 def create_session(config: Config) -> str:
     directory = str(config.agent_dir)
-    side = out("new-session", "-d", "-s", SESSION, "-n", WINDOW, "-c", directory, "-P", "-F", "#{pane_id}")
+    agent = out("new-session", "-d", "-s", SESSION, "-n", WINDOW, "-c", directory, "-P", "-F", "#{pane_id}")
     root = shlex.quote(str(config.root))
-    tmux("send-keys", "-t", side, f"gopher --root {root} tui", "Enter")
-    agent = out("split-window", "-h", "-l", "70%", "-t", side, "-c", directory, "-P", "-F", "#{pane_id}")
     tmux("send-keys", "-t", agent, f"gopher --root {root} launch --exec-agent", "Enter")
-    tmux("select-pane", "-t", agent)
     return gopher_window()
 
 
