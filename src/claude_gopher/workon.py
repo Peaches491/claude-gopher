@@ -101,7 +101,11 @@ class TtyUI:
         print(text, file=sys.stderr)
 
     def key(self) -> str:
-        with open("/dev/tty", "rb", buffering=0) as tty_in:
+        try:
+            tty_file = open("/dev/tty", "rb", buffering=0)
+        except OSError as error:
+            raise WorkonError("a choice is needed but there is no terminal; name the project and checkout") from error
+        with tty_file as tty_in:
             fd = tty_in.fileno()
             saved = termios.tcgetattr(fd)
             try:
@@ -181,11 +185,25 @@ def resolve_project(config: Config, ui, project: str | None, cwd: str) -> str:
     if project:
         require_project(config, project)
         return project
+    if inside := project_dir_at(config, cwd):
+        return inside
     here = here_checkout(config, cwd)
     candidates = owners(config.projects_dir, here) if here else []
     if len(candidates) == 1:
         return candidates[0]
+    current = os.environ.get("GOPHER_PROJECT")
+    if current and (not candidates or current in candidates) and current in all_projects(config):
+        return current
     return choose_project(config, ui, candidates or all_projects(config))
+
+
+def project_dir_at(config: Config, cwd: str) -> str | None:
+    try:
+        relative = Path(cwd).resolve().relative_to(config.projects_dir.resolve())
+    except ValueError:
+        return None
+    name = relative.parts[0] if relative.parts else None
+    return name if name in all_projects(config) else None
 
 
 def default_checkout(config: Config, project: str) -> Path | None:

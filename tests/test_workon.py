@@ -111,7 +111,8 @@ def test_default_checkout_wins(root, tmp_path):
     assert workon.resolve_checkout(load_config(root), FakeUI(), "alpha", None, str(tmp_path)) == tmp_path / "ref"
 
 
-def test_resolve_project_menu_and_new(root, tmp_path):
+def test_resolve_project_menu_and_new(root, tmp_path, monkeypatch):
+    monkeypatch.delenv("GOPHER_PROJECT", raising=False)
     config = load_config(root)
     create_project(config.projects_dir, "beta")
     here = git_repo(tmp_path / "co")
@@ -179,3 +180,22 @@ def test_shell_init_parses(shell, capsys):
     script = capsys.readouterr().out
     if subprocess.run(["which", shell], capture_output=True).returncode == 0:
         assert subprocess.run([shell, "-n", "-c", script]).returncode == 0
+
+
+def test_resolve_project_detects_project_dir_and_env(root, tmp_path, monkeypatch):
+    monkeypatch.delenv("GOPHER_PROJECT", raising=False)
+    config = load_config(root)
+    create_project(config.projects_dir, "beta")
+    inside = config.projects_dir / "beta" / "plan"
+    inside.mkdir(exist_ok=True)
+    assert workon.resolve_project(config, FakeUI(), None, str(inside)) == "beta"
+    assert workon.resolve_project(config, FakeUI(), None, str(config.projects_dir / "beta")) == "beta"
+    monkeypatch.setenv("GOPHER_PROJECT", "alpha")
+    assert workon.resolve_project(config, FakeUI(), None, str(tmp_path)) == "alpha"
+    monkeypatch.setenv("GOPHER_PROJECT", "gone")
+    assert workon.resolve_project(config, FakeUI(menu=["beta"]), None, str(tmp_path)) == "beta"
+    shared = git_repo(tmp_path / "shared")
+    add_checkout(config.projects_dir, "alpha", shared)
+    add_checkout(config.projects_dir, "beta", shared)
+    monkeypatch.setenv("GOPHER_PROJECT", "beta")
+    assert workon.resolve_project(config, FakeUI(), None, str(shared)) == "beta"
