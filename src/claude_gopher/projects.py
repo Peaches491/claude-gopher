@@ -26,6 +26,44 @@ def first_prose_line(body: str) -> str:
     return ""
 
 
+MAX_PRIORITY = 3
+PRIORITY_KEY = "priority"
+
+
+def human_status(project_dir: Path) -> Path:
+    return project_dir / "human" / "STATUS.md"
+
+
+def read_priority(project_dir: Path) -> int:
+    path = human_status(project_dir)
+    fields, _ = read_frontmatter(path.read_text()) if path.is_file() else ({}, "")
+    try:
+        return max(0, min(MAX_PRIORITY, int(fields.get(PRIORITY_KEY, 0))))
+    except ValueError:
+        return 0
+
+
+def write_priority(project_dir: Path, priority: int) -> int:
+    priority = max(0, min(MAX_PRIORITY, priority))
+    path = human_status(project_dir)
+    text = path.read_text() if path.is_file() else ""
+    lines = text.splitlines()
+    end = None
+    if lines and lines[0].strip() == "---":
+        end = next((i for i, line in enumerate(lines[1:], start=1) if line.strip() == "---"), None)
+    if end is None:
+        header, body = [], lines
+    else:
+        header, body = lines[1:end], lines[end + 1 :]
+    header = [line for line in header if line.partition(":")[0].strip() != PRIORITY_KEY]
+    if priority:
+        header.append(f"{PRIORITY_KEY}: {priority}")
+    out = (["---", *header, "---"] if header else []) + body
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(out) + ("\n" if out else ""))
+    return priority
+
+
 def project_info(project_dir: Path) -> dict:
     status = project_dir / "STATUS.md"
     text = status.read_text() if status.is_file() else ""
@@ -36,6 +74,7 @@ def project_info(project_dir: Path) -> dict:
         "summary": fields.get("summary") or first_prose_line(body),
         "state": fields.get("state"),
         "updated": fields.get("updated"),
+        "priority": read_priority(project_dir),
     }
 
 

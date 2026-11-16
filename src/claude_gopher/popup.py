@@ -1,6 +1,7 @@
 import shlex
 import subprocess
 import time
+from pathlib import Path
 
 GOPHER_SESSION = "gopher"
 PEEK_PREFIX = "gopher-peek-"
@@ -43,14 +44,18 @@ def gopher_agent_pane() -> str | None:
     return None
 
 
+def exact_target(session: str) -> str:
+    return "'=" + session.replace("'", "'\\''") + "'"
+
+
 def attach_command(target: str, kind: str) -> str:
     if kind == "gopher":
-        return f"TMUX= tmux attach -t ={GOPHER_SESSION}"
+        return f"TMUX= tmux attach -t {exact_target(GOPHER_SESSION)}"
     session = value("display-message", "-p", "-t", target, "#{session_name}")
     window = value("display-message", "-p", "-t", target, "#{window_id}")
     peek = f"{PEEK_PREFIX}{int(time.time() * 1000)}"
     return (
-        f"TMUX= tmux new-session -t {shlex.quote('=' + session)} -s {peek} \\; "
+        f"TMUX= tmux new-session -t {exact_target(session)} -s {peek} \\; "
         f"set-option destroy-unattached on \\; select-window -t {window}"
     )
 
@@ -94,6 +99,26 @@ def open_popup(kind: str, origin: str, target: str | None = None, prefill: str =
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
     )
     return target
+
+
+CLOSE_PROMPT = 'status=$?; printf "\\n(exit %s; press enter to close)" "$status"; read -r _'
+
+
+def command_popup(origin: str, cwd: Path | str, command: str, env: dict[str, str], title: str = "", client: str | None = None) -> None:
+    client = client or client_for_pane(origin)
+    if not client:
+        raise RuntimeError("no tmux client is showing this pane")
+    socket = value("display-message", "-p", "#{socket_path}")
+    origin_window = value("display-message", "-p", "-t", origin, "#{window_id}")
+    tmux("set", "-w", "-t", origin_window, "window-style", DIM_STYLE)
+    script = f"sh -c {shlex.quote(f'{command}; {CLOSE_PROMPT}')}; tmux -S {shlex.quote(socket)} set -wu -t {origin_window} window-style"
+    env_args = [arg for key, setting in env.items() for arg in ("-e", f"{key}={setting}")]
+    width, height = SIZE
+    subprocess.Popen(
+        ["tmux", "display-popup", "-c", client, "-E", "-d", str(cwd), *env_args, "-T", title,
+         "-s", "bg=terminal", "-S", "bg=terminal", "-w", width, "-h", height, script],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+    )
 
 
 def popup_clients() -> list[str]:

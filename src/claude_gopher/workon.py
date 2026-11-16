@@ -359,6 +359,9 @@ ACTIONS = {
     "source": "cd to a project's checkout and activate it (needs gopher shell-init)",
     "where": "list projects and their checkouts",
     "sidebar": "add the gopher sidebar to open project windows (--replace closes their shell/editor panes)",
+    "open": "open a project's tmux window, restoring its last snapshot (layout, resumed agent)",
+    "close": "snapshot a project's tmux window from tmux-resurrect, then close it",
+    "snapshot": "save a project's window snapshot from tmux-resurrect without closing it",
     "link": "add the current checkout to a project",
     "unlink": "remove the current checkout from a project",
 }

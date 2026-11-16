@@ -66,12 +66,15 @@ Source `examples/tmux.conf` from your tmux config for the `prefix g` popup and t
 `gopher workon term` lays a project window out as the sidebar (left) and the agent;
 `gopher workon sidebar --all` adds the sidebar to open windows.
 
-Sidebar keys: `j`/`k` move, `enter` jump to the project, `l` expand, `g` message Gopher about it,
+Sidebar keys: `j`/`k` move, `enter` jump to the project, `o` open its window (restoring the last
+snapshot) or jump to it, `c` close its window (after a y/n), `+`/`-` raise or lower its priority, `/` filter the list
+(letters in order, or a glob; enter keeps the filter, escape clears it), `l` expand, `g` message Gopher about it,
 `i` message its agent (both in a popup that closes when you send), `m`/`M` file an inbox item, `x`
 mark finished work seen, `r` one-line Haiku summary, `P` cycle Gopher's proactivity, `q` quit.
-For the pinned project: `b` inbox, `n` new inbox item, `u` refresh STATUS, `e` edit
-`human/STATUS.md`, plus any custom actions from the root `config.toml`. Each one is a header
-button and a hotkey that runs a shell command for the pinned project and shows its output:
+`k` at the top of the list moves into the header buttons; there `h`/`l` move between them and
+`j`/`k` return to the list. For the pinned project: `b` inbox, `n` new inbox item, `u` refresh STATUS, `e` edit
+`human/STATUS.md`, `Q` close this tab (after a y/n; `o` restores it), plus any custom actions from the root `config.toml`. Each one is a header
+button and a hotkey that runs a shell command for the pinned project in a tmux popup:
 
 ```toml
 [[tui.actions]]
@@ -79,10 +82,40 @@ key = "s"
 label = "Status"
 command = "git status --short"
 cwd = "checkout"   # "checkout" (the project's first checkout, default) or "project"
+match = "~/src/*"   # optional: only for projects with a checkout matching this glob
 ```
 
-The command gets `GOPHER_ROOT`, `GOPHER_PROJECT`, and `GOPHER_PROJECT_DIR` in its environment. A
+Other projects' blocks show the summary cut to `[tui] summary_lines` rows (default 2; 0 hides it).
+An agent's "done" counts as seen once its pane has had focus for `[tui] seen_dwell_seconds`
+(default 5).
+
+With `match`, the button shows only when the project has a matching checkout, and the command
+runs in the first one that matches. The command gets `GOPHER_ROOT`, `GOPHER_PROJECT`, and `GOPHER_PROJECT_DIR` in its environment. A
 key that clashes with a built-in key is skipped with a warning.
+
+## Saving the root
+
+`gopher save` commits the root's changes, one commit per project (`alpha: update STATUS, plan`)
+plus one for the root's own files, then pushes to the branch's upstream (`--no-push` to skip,
+`--dry-run` to preview). It refuses while a merge or rebase is in progress. Gopher runs it every
+`[gopher] save_every_hours` (default 2; 0 turns the timer off) via a session-scoped CronCreate
+job, at the end-of-day wrap, and on request; project agents commit there only when asked.
+
+## Priority
+
+`gopher project priority <project> [0-3|+|-]` shows or sets a project's priority, stored as
+`priority:` in its `human/STATUS.md` frontmatter. Starred projects get their own section at the
+top of the TUI, most stars first, with the usual colour order inside each level.
+
+## Project windows
+
+`gopher workon close <project>` triggers a tmux-resurrect save, keeps that window's part of it
+(layout, pane directories, which pane is the sidebar, the Claude session id recorded by
+tmux-assistant-resurrect) in `tmp/gopher/windows/<project>.json`, then closes the window.
+`gopher workon open <project>` rebuilds the window from that snapshot, back at its old index when
+free, and resumes the agent with `--resume`; with no snapshot it opens the standard sidebar and
+agent layout. `gopher workon snapshot <project>` saves without closing. Needs tmux-resurrect
+(and tmux-assistant-resurrect for the session ids).
 
 ## Prompts
 

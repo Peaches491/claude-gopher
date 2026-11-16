@@ -13,12 +13,12 @@ from claude_gopher.config import (
     PROACTIVITY_LEVELS, ROOT_CONFIG, ConfigError, gopher_proactivity, load_config, load_registry, resolve_root,
     save_registry, set_gopher_setting,
 )
-from claude_gopher.projects import list_projects, project_info
+from claude_gopher.projects import MAX_PRIORITY, list_projects, project_info, read_priority, write_priority
 from claude_gopher.prompt import CONTEXTS, assemble, is_gopher_session, session_context
 from claude_gopher.roots import RootError, check_name, check_target, create_project, create_root, register_root
 from claude_gopher.overview import current_sessions, project_overview
 from claude_gopher.setup import SetupIO, launch_interview, run_setup
-from claude_gopher import launch, popup, rename, workon
+from claude_gopher import launch, popup, rename, restore, rootgit, workon
 from claude_gopher.state import (
     apply_event,
     hook_settings,
@@ -245,6 +245,11 @@ def cmd_launch(args) -> int:
     if args.exec_agent:
         launch.exec_agent(config, args.passthrough)
         return 0
+    if args.relink:
+        session = args.session or launch.current_session()
+        if session and (moved := launch.relink(session)):
+            print(f"gopher: {moved}")
+        return 0
     for line in launch.launch(config, args.session):
         print(f"gopher: {line}")
     return 0
@@ -299,6 +304,44 @@ def cmd_workon_sidebar(args) -> int:
         print("no open project windows matched")
     for window, project in windows:
         print(workon.add_sidebar(config, window, project, replace=args.replace))
+    return 0
+
+
+def describe_snapshot(snapshot: restore.WindowSnapshot) -> str:
+    roles = ", ".join(
+        f"{pane.role}{' (resume ' + pane.claude_session[:8] + ')' if pane.claude_session else ''}" for pane in snapshot.panes
+    )
+    return f"{len(snapshot.panes)} pane(s): {roles}"
+
+
+def cmd_workon_open(args) -> int:
+    config = root_config(args)
+    try:
+        window, snapshot = restore.open_window(config, args.project, args.session)
+    except restore.RestoreError as error:
+        raise RootError(str(error)) from error
+    source = "fresh layout" if snapshot.source == "fresh" else "restored snapshot"
+    print(f"{args.project}: opened {window} ({source}; {describe_snapshot(snapshot)})")
+    return 0
+
+
+def cmd_workon_close(args) -> int:
+    config = root_config(args)
+    try:
+        snapshot = restore.close_window(config, args.project)
+    except restore.RestoreError as error:
+        raise RootError(str(error)) from error
+    print(f"{args.project}: closed; snapshot {restore.snapshot_path(config, args.project)} ({describe_snapshot(snapshot)})")
+    return 0
+
+
+def cmd_workon_snapshot(args) -> int:
+    config = root_config(args)
+    try:
+        snapshot = restore.capture(config, args.project)
+    except restore.RestoreError as error:
+        raise RootError(str(error)) from error
+    print(f"{args.project}: snapshot {restore.snapshot_path(config, args.project)} ({describe_snapshot(snapshot)})")
     return 0
 
 
@@ -368,12 +411,55 @@ def cmd_commands(args) -> int:
 COMMANDS: dict = {}
 
 
+def cmd_save(args) -> int:
+    config = root_config(args)
+    try:
+        report = rootgit.save(config, push=not args.no_push, dry_run=args.dry_run)
+    except rootgit.SaveError as error:
+        raise RootError(str(error)) from error
+    if not report.commits and not report.pushed:
+        print("nothing to save")
+        return 0
+    verb = "would commit" if args.dry_run else "committed"
+    for message in report.commits:
+        print(f"{verb}: {message}")
+    if report.pushed:
+        print("pushed")
+    return 0
+
+
 def cmd_project_new(args) -> int:
     config = root_config(args)
     project_dir = create_project(config.projects_dir, args.name, args.summary)
     for checkout in args.checkout:
         add_checkout(config.projects_dir, args.name, Path(checkout).expanduser().resolve())
     print(project_dir)
+    return 0
+
+
+def parse_priority(value: str | None, current: int) -> int:
+    if value in (None, ""):
+        return current
+    if value in ("+", "up"):
+        return current + 1
+    if value in ("-", "down"):
+        return current - 1
+    try:
+        return int(value)
+    except ValueError:
+        raise RootError(f"priority must be 0-{MAX_PRIORITY}, + or -, not {value!r}") from None
+
+
+def cmd_project_priority(args) -> int:
+    config = root_config(args)
+    project_dir = config.projects_dir / args.name
+    if not project_dir.is_dir():
+        raise RootError(f"no project named {args.name}")
+    current = read_priority(project_dir)
+    priority = parse_priority(args.value, current)
+    if priority != current:
+        priority = write_priority(project_dir, priority)
+    print(f"{args.name}: priority {priority} ({'*' * priority or 'none'})")
     return 0
 
 
@@ -530,6 +616,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     launcher = sub.add_parser("launch", help="start the Gopher agent's tmux session and link its window at index 0")
     launcher.add_argument("--session", help="tmux session to link into (default: the current one)")
+    launcher.add_argument("--relink", action="store_true", help="only move the Gopher window back to index 0 if it drifted (for a window-unlinked hook)")
     launcher.add_argument("--exec-agent", action="store_true", help=argparse.SUPPRESS)
     launcher.set_defaults(func=cmd_launch, passthrough=[])
 
@@ -547,12 +634,21 @@ def build_parser() -> argparse.ArgumentParser:
     proactivity.add_argument("level", nargs="?", choices=PROACTIVITY_LEVELS)
     proactivity.set_defaults(func=cmd_proactivity)
 
+    saver = sub.add_parser("save", help="commit the root's changes (one commit per project, one for root files) and push")
+    saver.add_argument("--no-push", action="store_true", help="commit only")
+    saver.add_argument("--dry-run", action="store_true", help="show the commits without making them")
+    saver.set_defaults(func=cmd_save)
+
     project = sub.add_parser("project", help="manage projects").add_subparsers(dest="project_command", required=True)
     project_new = project.add_parser("new", help="create a project")
     project_new.add_argument("name")
     project_new.add_argument("--summary", default="")
     project_new.add_argument("--checkout", action="append", default=[], help="checkout path owned by the project")
     project_new.set_defaults(func=cmd_project_new)
+    project_priority = project.add_parser("priority", help=f"show or set a project's priority (0-{MAX_PRIORITY} stars, in human/STATUS.md)")
+    project_priority.add_argument("name")
+    project_priority.add_argument("value", nargs="?", help=f"0-{MAX_PRIORITY}, + or -")
+    project_priority.set_defaults(func=cmd_project_priority)
     project_rename = project.add_parser("rename", help="rename a project: directory, STATUS heading, gopher state, tmux windows")
     project_rename.add_argument("old")
     project_rename.add_argument("new")
@@ -611,6 +707,14 @@ def build_parser() -> argparse.ArgumentParser:
     sidebar.add_argument("--all", action="store_true", help="every open project window")
     sidebar.add_argument("--replace", action="store_true", help="also close the window's shell and editor panes")
     sidebar.set_defaults(func=cmd_workon_sidebar)
+    open_window = workon_sub.add_parser("open", help=workon.ACTIONS["open"])
+    open_window.add_argument("project")
+    open_window.add_argument("--session", help="tmux session for the window (default: the snapshot's, else the current one)")
+    open_window.set_defaults(func=cmd_workon_open)
+    for action, handler in (("close", cmd_workon_close), ("snapshot", cmd_workon_snapshot)):
+        window_action = workon_sub.add_parser(action, help=workon.ACTIONS[action])
+        window_action.add_argument("project")
+        window_action.set_defaults(func=handler)
     where = workon_sub.add_parser("where", help=workon.ACTIONS["where"])
     where.add_argument("project", nargs="?")
     where.set_defaults(func=cmd_workon_where)

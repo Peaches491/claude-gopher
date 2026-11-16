@@ -168,7 +168,11 @@ def test_sidebar_pins_project_and_works_inbox(config, monkeypatch):
     async def steps(app, pilot):
         assert [card.project_name for card in app.cards()] == ["beta"]
         assert all(card.compact for card in app.cards())
-        assert "alpha" in str(app.query_one("#pinned-text", tui.Static).render())
+        assert [card.styles.height.value for card in app.cards()] == [4]
+        assert app.cards()[0].query_one(".body", tui.Static)
+        header = app.query_one(tui.PinnedHeader)
+        assert "alpha" in str(header.query_one(".name", tui.Static).render())
+        assert header.has_class("pstate-active")
         await pilot.press("i")
         assert popups[-1] == ("agent", "%9", "[from: alpha] ")
         await pilot.press("b")
@@ -185,6 +189,16 @@ def test_sidebar_pins_project_and_works_inbox(config, monkeypatch):
         assert not inbox.has_class("open")
         await pilot.press("u")
         assert ("send-keys", "-t", "%3", "-l", tui.REFRESH_STATUS_PROMPT) in sent
+        closed = []
+        monkeypatch.setattr(tui.restore, "close_window", lambda config, name: closed.append(name))
+        await pilot.press("Q")
+        await pilot.pause()
+        assert isinstance(app.screen, tui.ConfirmScreen)
+        await pilot.press("n")
+        assert not closed
+        await pilot.press("Q", "y")
+        await app.workers.wait_for_complete()
+        assert closed == ["alpha"]
 
     drive_app(app, steps)
 
@@ -205,6 +219,12 @@ cwd = "project"
 key = "j"
 label = "Clash"
 command = "true"
+
+[[tui.actions]]
+key = "z"
+label = "Scoped"
+command = "pwd"
+match = "*/scoped-*"
 """
 
 
@@ -214,17 +234,53 @@ def write_actions(config):
     return load_config(config.root)
 
 
-def test_run_custom_action_uses_checkout_or_project_dir(config, tmp_path):
+def run_action(loaded, project, action):
+    cwd, env = tui.action_context(loaded, project, action)
+    result = tui.subprocess.run(action.command, shell=True, cwd=cwd, env={**os.environ, **env}, capture_output=True, text=True)
+    return result.stdout.strip()
+
+
+def test_action_context_uses_checkout_or_project_dir(config, tmp_path):
     checkout = tmp_path / "co"
     checkout.mkdir()
     loaded = write_actions(config)
-    where, who, _ = tui.tui_actions(loaded)
+    where, who, _, scoped = tui.tui_actions(loaded)
     alpha = {"name": "alpha", "path": str(config.projects_dir / "alpha")}
     with pytest.raises(RuntimeError, match="no checkouts"):
-        tui.run_custom_action(loaded, alpha, where)
+        tui.action_context(loaded, alpha, where)
     add_checkout(config.projects_dir, "alpha", checkout)
-    assert tui.run_custom_action(loaded, alpha, where) == str(checkout)
-    assert tui.run_custom_action(loaded, alpha, who) == "alpha"
+    assert run_action(loaded, alpha, where) == str(checkout)
+    assert run_action(loaded, alpha, who) == "alpha"
+    assert not tui.action_applies(alpha, scoped)
+    with pytest.raises(RuntimeError, match="no checkout matching"):
+        tui.action_context(loaded, alpha, scoped)
+    other = tmp_path / "scoped-co"
+    other.mkdir()
+    add_checkout(config.projects_dir, "alpha", other)
+    assert tui.action_applies(alpha, scoped)
+    assert run_action(loaded, alpha, scoped) == str(other)
+
+
+def test_summary_lines_setting(config):
+    assert tui.sidebar_summary_lines(config) == 2
+    path = config.root / "config.toml"
+    path.write_text(path.read_text() + "\n[tui]\nsummary_lines = 0\n")
+    assert tui.sidebar_summary_lines(load_config(config.root)) == 0
+    hidden = tui.ProjectCard(project("alpha", []), None, compact=True, summary_lines=0)
+    assert "body" not in hidden.parts()
+    path.write_text(path.read_text().replace("summary_lines = 0", "summary_lines = -1"))
+    with pytest.raises(tui.ConfigError, match="summary_lines"):
+        tui.sidebar_summary_lines(load_config(config.root))
+
+
+def test_seen_dwell_setting(config):
+    assert tui.GopherTUI(config).focus.dwell == 5
+    path = config.root / "config.toml"
+    path.write_text(path.read_text() + "\n[tui]\nseen_dwell_seconds = 30\n")
+    assert tui.GopherTUI(load_config(config.root)).focus.dwell == 30
+    path.write_text(path.read_text().replace("= 30", '= "soon"'))
+    app = tui.GopherTUI(load_config(config.root))
+    assert app.focus.dwell == 5 and any("seen_dwell_seconds" in p for p in app.action_problems)
 
 
 def test_tui_actions_rejects_bad_entries(config):
@@ -241,18 +297,37 @@ def test_sidebar_binds_custom_actions(config, monkeypatch):
     monkeypatch.setattr(tui, "project_overview", lambda config: [pinned])
     stub_tmux(monkeypatch)
     ran = []
-    monkeypatch.setattr(tui, "run_custom_action", lambda config, project, action: ran.append(action.label) or "done")
+    monkeypatch.setenv("TMUX_PANE", "%2")
+    checkout = config.root / "co"
+    checkout.mkdir()
+    add_checkout(config.projects_dir, "alpha", checkout)
+    monkeypatch.setattr(tui.popup, "command_popup", lambda origin, cwd, command, env, title="": ran.append((origin, cwd, command, env["GOPHER_PROJECT"])))
     app = tui.GopherTUI(loaded, pinned="alpha")
 
     async def steps(app, pilot):
-        labels = [str(button.label) for button in app.query("#pinned-buttons Button")]
-        assert labels[:2] == ["s Where", "w Who"] and "j Clash" not in labels
-        assert any("already taken" in problem for problem in app.action_problems)
-        await pilot.press("w")
-        await app.workers.wait_for_complete()
         await pilot.pause()
-        assert ran == ["Who"]
-        assert "done" in str(app.query_one("#pinned-output", tui.Static).render())
+        labels = [str(button.label) for button in app.query("#pinned-buttons Button") if button.display]
+        assert labels[:2] == ["s Where", "w Who"] and "j Clash" not in labels and "z Scoped" not in labels
+        await pilot.press("z")
+        await app.workers.wait_for_complete()
+        assert ran == []
+        assert any("already taken" in problem for problem in app.action_problems)
+        buttons = [button for button in app.query("#pinned-buttons Button") if button.display]
+        buttons[0].focus()
+        await pilot.press("l")
+        assert app.focused is buttons[1]
+        await pilot.press("left", "h")
+        assert app.focused is buttons[-1]
+        await pilot.press("j")
+        assert app.focused is app.project_list()
+        await pilot.press("k")
+        assert app.focused is buttons[0]
+        await pilot.press("down")
+        await pilot.press("up")
+        assert app.focused is buttons[0]
+        await pilot.press("j")
+        await pilot.press("w")
+        assert ran == [("%2", config.projects_dir / "alpha", "echo $GOPHER_PROJECT", "alpha")]
 
     drive_app(app, steps)
 
@@ -383,3 +458,147 @@ def test_pane_project_prefers_agent_then_cwd_then_window(config, monkeypatch):
     assert tui.pane_project(config, "%2", projects) == "beta"
     assert tui.pane_project(config, "%3", projects) == "beta"
     assert tui.pane_project(config, "%4", projects) is None
+
+
+def test_open_and_close_project_windows(config, monkeypatch):
+    rows = [project("alpha"), project("beta")]
+    monkeypatch.setattr(tui, "project_overview", lambda config: rows)
+    stub_tmux(monkeypatch)
+    open_windows = {"beta": "@2"}
+    monkeypatch.setattr(tui, "project_window_ids", lambda name: [(open_windows[name], name)] if name in open_windows else [])
+    jumps, opened, closed = [], [], []
+    monkeypatch.setattr(tui.popup, "jump_to", jumps.append)
+    monkeypatch.setattr(tui.restore, "open_window", lambda config, name, session=None: opened.append(name) or ("@7", tui.restore.WindowSnapshot(name, "0", "", 0, "fresh")))
+    monkeypatch.setattr(tui.restore, "close_window", lambda config, name: closed.append(name))
+    app = tui.GopherTUI(config)
+
+    async def steps(app, pilot):
+        assert app.selected()["name"] == "alpha"
+        await pilot.press("o")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert opened == ["alpha"] and jumps == ["@7"]
+        await pilot.press("j", "o")
+        assert jumps[-1] == "@2" and opened == ["alpha"]
+        await pilot.press("c")
+        await pilot.pause()
+        assert isinstance(app.screen, tui.ConfirmScreen)
+        await pilot.press("n")
+        await pilot.press("c", "y")
+        await app.workers.wait_for_complete()
+        assert closed == ["beta"]
+
+    drive_app(app, steps)
+
+
+def test_priority_round_trips_in_human_status(config):
+    alpha = config.projects_dir / "alpha"
+    human = alpha / "human" / "STATUS.md"
+    human.parent.mkdir(parents=True, exist_ok=True)
+    human.write_text("## 2026-11-16\n\nmy notes\n")
+    assert tui.write_priority(alpha, 2) == 2
+    assert human.read_text() == "---\npriority: 2\n---\n## 2026-11-16\n\nmy notes\n"
+    assert tui.write_priority(alpha, 9) == 3
+    assert tui.write_priority(alpha, 0) == 0
+    assert human.read_text() == "## 2026-11-16\n\nmy notes\n"
+
+
+def test_priority_section_and_keys(config, monkeypatch):
+    starred = {**project("beta"), "priority": 2, "path": str(config.projects_dir / "alpha")}
+    rows = [starred, project("alpha"), project("gamma")]
+    monkeypatch.setattr(tui, "project_overview", lambda config: rows)
+    stub_tmux(monkeypatch)
+    written = []
+    monkeypatch.setattr(tui, "write_priority", lambda path, value: written.append(value) or value)
+    app = tui.GopherTUI(config)
+
+    async def steps(app, pilot):
+        labels = [node.label if isinstance(node, tui.SectionLabel) else node.project_name for node in app.project_list().children]
+        assert labels == ["Priority", "beta", "Projects", "alpha", "gamma"]
+        assert app.selected()["name"] == "beta"
+        assert str(app.cards()[0].query_one(".name", tui.Static).render()).startswith(tui.PRIORITY_ICON * 2)
+        await pilot.press("j")
+        assert app.selected()["name"] == "alpha"
+        await pilot.press("plus")
+        await pilot.press("k", "minus")
+        assert written == [1, 1]
+
+    drive_app(app, steps)
+
+
+def test_rank_puts_stars_first():
+    rows = [project("calm"), {**project("starred"), "priority": 1}, {**project("top"), "priority": 3}]
+    assert [p["name"] for p in sorted(rows, key=overview.project_rank)] == ["top", "starred", "calm"]
+
+
+@pytest.mark.parametrize("pattern, name, expected", [
+    ("", "wfe-view", True), ("wv", "wfe-view", True), ("ew", "wfe-view", True), ("xw", "wfe-view", False),
+    ("WFE", "wfe-view", True), ("wfe*", "wfe-view", True), ("*view", "wfe-view", True),
+    ("pipe*", "wfe-pipedream-deploy", True), ("view*", "atlas-app", False),
+])
+def test_fuzzy_match(pattern, name, expected):
+    assert tui.fuzzy_match(pattern, name) is expected
+
+
+def test_search_filters_and_clears(config, monkeypatch):
+    rows = [project("wfe-view"), project("atlas-app"), project("wfe")]
+    monkeypatch.setattr(tui, "project_overview", lambda config: rows)
+    stub_tmux(monkeypatch)
+    app = tui.GopherTUI(config)
+
+    async def steps(app, pilot):
+        await pilot.press("slash", "w", "f", "e", "j")
+        await pilot.pause()
+        assert app.search == "wfej" and [c.project_name for c in app.cards()] == []
+        await pilot.press("backspace")
+        await pilot.pause()
+        assert [c.project_name for c in app.cards()] == ["wfe-view", "wfe"]
+        await pilot.press("enter")
+        assert app.focused is app.project_list()
+        await pilot.press("j")
+        assert app.selected()["name"] == "wfe"
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.search == "" and len(app.cards()) == 3
+
+    drive_app(app, steps)
+
+
+def test_reloads_when_code_changes_and_imports(config, monkeypatch):
+    monkeypatch.setattr(tui, "project_overview", lambda config: [project("alpha")])
+    stub_tmux(monkeypatch)
+    app = tui.GopherTUI(config)
+    started = []
+    monkeypatch.setattr(app, "run_worker", lambda work, **kwargs: kwargs.get("group") == "reload" and started.append(work))
+
+    async def steps(app, pilot):
+        monkeypatch.setattr(tui, "source_stamp", lambda: time.time())
+        app.check_reload()
+        assert not started
+        changed = time.time() - 5
+        monkeypatch.setattr(tui, "source_stamp", lambda: changed)
+        app.stamp = changed - 10
+        app.check_reload()
+        assert started == [app.try_reload] and app.stamp == changed
+        app.check_reload()
+        assert len(started) == 1
+
+    drive_app(app, steps)
+
+
+def test_try_reload_only_with_importable_code(config, monkeypatch):
+    monkeypatch.setattr(tui, "project_overview", lambda config: [project("alpha")])
+    stub_tmux(monkeypatch)
+    app = tui.GopherTUI(config)
+    calls = []
+
+    async def steps(app, pilot):
+        monkeypatch.setattr(app, "call_from_thread", lambda fn, *args, **kwargs: calls.append(fn.__name__))
+        monkeypatch.setattr(tui, "new_code_imports", lambda: False)
+        app.try_reload()
+        assert not app.reloading and calls == ["notify"]
+        monkeypatch.setattr(tui, "new_code_imports", lambda: True)
+        app.try_reload()
+        assert app.reloading and calls[-1] == "exit"
+
+    drive_app(app, steps)

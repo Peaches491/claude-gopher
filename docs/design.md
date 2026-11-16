@@ -410,7 +410,7 @@ wake: false
   needs login, done, working, background, idle), then longest-waiting first for needs input and
   login, most recent first otherwise; projects with no agent by STATUS.md date. The left bar and
   the right-aligned status use the status colour; "done" agents show green.
-- "Done" is acknowledged when a tmux client keeps the agent's pane focused for 5 s after it
+- "Done" is acknowledged when a tmux client keeps the agent's pane focused for `[tui] seen_dwell_seconds` (default 5) after it
   finished (the TUI samples `list-clients` on each 5 s poll), or with `x`. Acks live in
   `<state_dir>/tui/acks.json`; hook records carry `finished` (set on `Stop`, cleared by the next
   non-idle event). Known gap: an outer client with the popup open still counts as viewing the pane
@@ -432,17 +432,40 @@ wake: false
 ### 5b. Sidebar (2026-11-13)
 
 - `gopher workon term` lays a project window out as two panes: the TUI as a full-height left
-  column (20%) and the agent (80%). `gopher workon sidebar <project>|--all [--replace]` adds the
+  column (20%) and the agent (80%). `gopher workon close|open|snapshot <project>` closes a project
+  window and brings it back: close takes a fresh tmux-resurrect save, copies that window's slice
+  (layout string, pane dirs and roles, Claude session ids from tmux-assistant-resurrect) to
+  `<state_dir>/windows/<project>.json`, and kills the window (resurrect's later saves no longer
+  contain it, so the copy is the record); open rebuilds panes in order, applies the layout, starts
+  the sidebar and `gopher workon agent ... -- --resume <id>`, and other panes come back as shells.
+  The sidebar's `o`/`c` keys call the same code.
+  `gopher workon sidebar <project>|--all [--replace]` adds the
   sidebar to open windows (`--replace` closes their shell/editor panes, never other programs).
 - `gopher tui` pins the pane's own project (agent in the pane, then cwd, then window name;
   `--project` overrides) in a header: summary, cached Haiku line, each agent's state and name,
   inbox and links, and buttons with hotkeys: custom actions (`[[tui.actions]]` in the root
-  `config.toml`: key, label, shell command, run in the first checkout or the project directory,
-  output shown in the header), `b` inbox list, `n` new inbox item, `u` ask the agent beside it to refresh
+  `config.toml`: key, label, shell command, optional `match` glob on checkout paths that hides the action from
+  projects without a matching checkout, run in the first (matching) checkout or the project directory,
+  in a 90% tmux popup so it gets a real terminal's colour and width), `b` inbox list, `n` new inbox item, `u` ask the agent beside it to refresh
   STATUS.md, `e` edit `human/STATUS.md` in a popup. The inbox list: `enter` prefills the agent
   beside it with `Inbox item inbox/<file>: `, `x` moves the item to `inbox/read/`, `l` shows it.
-  Other projects follow as compact two-row blocks. Without a pinned project it is the full
+  Other projects follow as compact blocks: name and status, links and agents, then the summary
+  (or Haiku line) cut to `[tui] summary_lines` rows (default 2; 0 hides it). Without a pinned project it is the full
   dashboard.
+- Live reload: every 2 s the TUI compares the newest mtime under the installed package; once a
+  change has settled, it checks the new code imports (in a subprocess), then exits and re-execs
+  itself with the same arguments, so every open sidebar picks up a new version. It waits while a
+  modal or the search box is open, and stays on the old code (with a warning) if the new code
+  fails to import.
+- Saving the root: Gopher owns the root repository's history. `gopher save` groups `git status`
+  paths by project directory (projects/, archived/, closed/), commits each group with a message
+  naming the areas touched, commits the rest as `root: ...`, and pushes. Gopher schedules it every
+  `[gopher] save_every_hours` with a session-only recurring CronCreate job (re-created each
+  session; CronCreate jobs expire after 7 days) and also runs it at wrap-up and on request.
+- Priority: 0-3 stars in `human/STATUS.md` frontmatter (`priority:`; the user's judgment, so
+  never set by project agents), set with `gopher project priority` or the TUI's `+`/`-`. Starred
+  projects sort first (stars, then colour group) under a "Priority" label, shown as stars before
+  the name. `/` filters the list by name: letters in order, or a glob.
 - Keys on a highlighted project: `enter`/`t` jump to it, `l` expand, `g` popup on Gopher with
   `[project: X] ` prefilled, `i` popup on that project's agent with `[from: <pinned>] `
   prefilled (no live agent: the inbox prompt), `m`/`M` inbox item, `home`/`end` top/bottom.

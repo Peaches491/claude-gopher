@@ -153,3 +153,19 @@ def test_ensure_agent_dir_makes_notebook_when_enabled(config):
 def test_gopher_prompt_names_reference_library(config):
     text = launch.write_prompt(config).read_text()
     assert "## Reference library" in text and str(config.reference_dir) in text
+
+
+def test_relink_moves_drifted_window_back_to_zero(config, monkeypatch):
+    fake = FakeTmux({"main": [("1", "@9", "gopher"), ("2", "@1", "work")], "gopher": [("1", "@9", "gopher")]})
+    monkeypatch.setattr(launch, "tmux", fake)
+    assert launch.relink("main") == "moved back to main:0 from 1"
+    assert ("move-window", "-s", "=main:1", "-t", "=main:0") in fake.calls
+    assert launch.launch(config, "main")[-1] == "moved back to main:0 from 1"
+    assert not any(c[0] == "link-window" for c in fake.calls)
+
+
+def test_relink_leaves_occupied_zero_alone(config, monkeypatch):
+    fake = FakeTmux({"main": [("0", "@1", "work"), ("1", "@9", "gopher")], "gopher": [("1", "@9", "gopher")]})
+    monkeypatch.setattr(launch, "tmux", fake)
+    assert launch.relink("main") is None
+    assert not any(c[0] == "move-window" for c in fake.calls)

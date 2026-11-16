@@ -176,7 +176,7 @@ def project_rank(project: dict) -> tuple:
         recency = -max(times)
     else:
         recency = -status_day(project)
-    return (colour_group(project), urgency(kind), recency, project["name"])
+    return (-project.get("priority", 0), colour_group(project), urgency(kind), recency, project["name"])
 
 
 def project_overview(config: Config, sessions: list[dict] | None = None) -> list[dict]:

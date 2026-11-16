@@ -1,7 +1,8 @@
 # Gopher project system
 
 This session runs inside a gopher root at `{{root}}`. The root is a git repository the user keeps
-as a record of their work; do not commit to it unless asked. Every body of work is a project under
+as a record of their work. Gopher commits and pushes it (`gopher save`); do not commit to it
+yourself unless asked. Every body of work is a project under
 `{{projects_dir}}/<name>/`.
 
 ## Project layout

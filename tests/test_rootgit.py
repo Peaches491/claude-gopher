@@ -1,0 +1,75 @@
+import subprocess
+
+import pytest
+
+from claude_gopher import rootgit
+from claude_gopher.config import load_config
+from claude_gopher.roots import create_project, create_root
+
+
+def run(*argv, cwd):
+    return subprocess.run(argv, cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+
+@pytest.fixture
+def config(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    for key, value in {
+        "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+        "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+    }.items():
+        monkeypatch.setenv(key, value)
+    root = tmp_path / "root"
+    create_root(root)
+    config = load_config(root)
+    create_project(config.projects_dir, "alpha")
+    create_project(config.projects_dir, "beta")
+    remote = tmp_path / "remote.git"
+    run("git", "init", "-q", "--bare", str(remote), cwd=tmp_path)
+    run("git", "add", "-A", cwd=root)
+    run("git", "commit", "-q", "-m", "init", cwd=root)
+    run("git", "remote", "add", "origin", str(remote), cwd=root)
+    run("git", "push", "-q", "-u", "origin", "HEAD", cwd=root)
+    return config
+
+
+def test_group_of_splits_projects_and_root(config):
+    dirs = rootgit.lifecycle_dirs(config)
+    assert rootgit.group_of("projects/alpha/STATUS.md", dirs) == ("projects/alpha", "STATUS.md")
+    assert rootgit.group_of("archived/old/plan/x.md", dirs) == ("archived/old", "plan")
+    assert rootgit.group_of("config.toml", dirs) == ("root", "config.toml")
+    assert rootgit.commit_message("projects/alpha", {"STATUS.md", "human", "plan"}) == "alpha: update STATUS, human notes, plan"
+
+
+def test_save_commits_per_project_and_pushes(config):
+    root = config.root
+    (config.projects_dir / "alpha" / "STATUS.md").write_text("changed\n")
+    (config.projects_dir / "beta" / "plan").mkdir(exist_ok=True)
+    (config.projects_dir / "beta" / "plan" / "p.md").write_text("plan\n")
+    (root / "config.toml").write_text((root / "config.toml").read_text() + "\n# note\n")
+    assert rootgit.save(config, dry_run=True).commits == ["alpha: update STATUS", "beta: update plan", "root: update config.toml"]
+    assert run("git", "status", "--porcelain", cwd=root)
+    report = rootgit.save(config)
+    assert report.pushed and report.commits == ["alpha: update STATUS", "beta: update plan", "root: update config.toml"]
+    assert run("git", "status", "--porcelain", cwd=root) == ""
+    assert run("git", "log", "--format=%s", "-3", "@{upstream}", cwd=root).splitlines() == [
+        "root: update config.toml", "beta: update plan", "alpha: update STATUS",
+    ]
+    assert run("git", "show", "--stat", "--format=", "HEAD~2", cwd=root).startswith("projects/alpha/STATUS.md |")
+    assert rootgit.save(config).commits == []
+
+
+def test_save_refuses_during_a_merge(config):
+    git_dir = config.root / ".git"
+    (git_dir / "MERGE_HEAD").write_text("abc\n")
+    with pytest.raises(rootgit.SaveError, match="MERGE_HEAD"):
+        rootgit.save(config)
+
+
+def test_save_reports_failed_push(config, tmp_path):
+    (config.projects_dir / "alpha" / "STATUS.md").write_text("changed\n")
+    run("git", "remote", "set-url", "origin", str(tmp_path / "missing.git"), cwd=config.root)
+    with pytest.raises(rootgit.SaveError, match="push failed"):
+        rootgit.save(config)
+    assert run("git", "log", "--format=%s", "-1", cwd=config.root) == "alpha: update STATUS"

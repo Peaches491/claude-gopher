@@ -137,6 +137,24 @@ def gopher_features(config: Config) -> list[str]:
     return features
 
 
+DEFAULT_SUMMARY_LINES = 2
+DEFAULT_SEEN_DWELL_SECONDS = 5
+
+
+def seen_dwell_seconds(config: Config) -> float:
+    seconds = config.settings.get("tui", {}).get("seen_dwell_seconds", DEFAULT_SEEN_DWELL_SECONDS)
+    if not isinstance(seconds, (int, float)) or isinstance(seconds, bool) or seconds < 0:
+        raise ConfigError(f"[tui] seen_dwell_seconds must be a non-negative number, not {seconds!r}")
+    return seconds
+
+
+def sidebar_summary_lines(config: Config) -> int:
+    lines = config.settings.get("tui", {}).get("summary_lines", DEFAULT_SUMMARY_LINES)
+    if not isinstance(lines, int) or isinstance(lines, bool) or lines < 0:
+        raise ConfigError(f"[tui] summary_lines must be a whole number of lines, not {lines!r}")
+    return lines
+
+
 ACTION_CWDS = ("checkout", "project")
 
 
@@ -146,6 +164,7 @@ class CustomAction:
     label: str
     command: str
     cwd: str = "checkout"
+    match: str | None = None
 
 
 def tui_actions(config: Config) -> list[CustomAction]:
@@ -159,8 +178,21 @@ def tui_actions(config: Config) -> list[CustomAction]:
         cwd = entry.get("cwd", "checkout")
         if cwd not in ACTION_CWDS:
             raise ConfigError(f"[[tui.actions]] cwd must be one of {', '.join(ACTION_CWDS)}, not {cwd!r}")
-        actions.append(CustomAction(entry["key"], entry["label"], entry["command"], cwd))
+        match = entry.get("match")
+        if match is not None and not (isinstance(match, str) and match):
+            raise ConfigError("[[tui.actions]] match must be a checkout path glob")
+        actions.append(CustomAction(entry["key"], entry["label"], entry["command"], cwd, match))
     return actions
+
+
+DEFAULT_SAVE_EVERY_HOURS = 2
+
+
+def gopher_save_every_hours(config: Config) -> int:
+    hours = config.settings.get("gopher", {}).get("save_every_hours", DEFAULT_SAVE_EVERY_HOURS)
+    if not isinstance(hours, int) or isinstance(hours, bool) or not 0 <= hours <= 24:
+        raise ConfigError(f"[gopher] save_every_hours must be a whole number of hours from 0 to 24, not {hours!r}")
+    return hours
 
 
 def set_gopher_setting(root: Path, key: str, value: str) -> None:

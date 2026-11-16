@@ -117,7 +117,28 @@ def window_at(session: str, index: str) -> str | None:
     return None
 
 
+def linked_index(window: str, session: str) -> str | None:
+    for line in out("list-windows", "-t", f"={session}", "-F", "#{window_index} #{window_id}").splitlines():
+        index, found = line.split()
+        if found == window:
+            return index
+    return None
+
+
+def relink(session: str) -> str | None:
+    if not has_session(SESSION):
+        return None
+    window = gopher_window()
+    index = linked_index(window, session)
+    if index is None or index == LINK_INDEX or window_at(session, LINK_INDEX):
+        return None
+    tmux("move-window", "-s", f"={session}:{index}", "-t", f"={session}:{LINK_INDEX}")
+    return f"moved back to {session}:{LINK_INDEX} from {index}"
+
+
 def link(window: str, session: str) -> str:
+    if moved := relink(session):
+        return moved
     existing = window_at(session, LINK_INDEX)
     if existing == window:
         return f"already linked at {session}:{LINK_INDEX}"
