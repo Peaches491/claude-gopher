@@ -1,170 +1,327 @@
 # claude-gopher
 
-A project system and secretary agent for running many Claude Code sessions at once: `gopher`
-helps you `workon` your separate projects.
+**Run a dozen Claude Code sessions at once without losing track of any of them.**
 
-- **Projects**: each body of work has a directory (status, plans, notes, resources, inbox) and one
-  or more linked git checkouts.
-- **Gopher**: a Claude Code session that lives in tmux window 0 (and a `prefix g` popup). Tell it
-  anything about any project; it files it in that project's inbox or messages the project's agent.
-- **TUI**: a live list of project blocks: their agents' states, summaries, and PRs.
+`gopher` gives each body of work a project with a home directory, its git checkouts, and its own
+Claude Code agent in a tmux window. A live sidebar in every window shows what each agent is doing
+and which ones need you. **Gopher**, a secretary agent one keypress away, takes anything you tell
+it about any project and routes it to the right place.
 
-Design: [docs/design.md](docs/design.md).
+<p align="center">
+  <img src="docs/images/demo.gif" alt="The gopher sidebar: a pinned project header with buttons, and every other project below, colour-coded by state" width="420">
+</p>
 
-## Install
+## Why
+
+Once you have more than three or four agents going, the hard part is no longer the code. It's
+remembering which agent is waiting on you, what each one was doing, where its notes are, and which
+worktree belongs to what. gopher is built around a few ideas:
+
+- **Projects, not sessions.** A session ends; a project persists. Each project keeps its status,
+  plans, notes, resources, and inbox in a plain directory, so a new agent picks up exactly where
+  the last one left off.
+- **One glance tells you who needs you.** Hooks record each agent's state, and the sidebar sorts
+  projects by urgency: waiting on input, finished and unseen, blocked on a login, working, idle.
+- **Tell one agent, reach any project.** Gopher is a Claude Code session in tmux window 0 (and a
+  `prefix g` popup). Say "tell payments the API changed" or "remind me to rebase search tomorrow"
+  and it files an inbox item or messages that project's agent directly.
+- **Email, not interrupts.** Inbox items wait politely: an agent mentions new mail and you decide
+  when it acts. Mark an item `--wake` when it really should interrupt.
+- **Plain files you own.** Everything lives in a *root* (default `~/workon`), a git repository
+  you keep and back up. Gopher commits and pushes it on a timer. Your git checkouts are never
+  written to; ownership is recorded only in the root.
+- **Site-specific, not hard-coded.** Your build system, ticket tracker, and review flow go in the
+  root's prompts and config, written for you by an interview during `gopher setup`.
+
+## Highlights
+
+- **Sidebar in every project window.** It pins that window's project at the top (summary, agents,
+  checkouts, and buttons with a one-line hint for each), and lists the others below.
+- **Priorities.** Give a project 0-3 stars with `+`/`-`; starred projects get their own section
+  at the top.
+- **Fuzzy search.** Press `/` and type letters in order (`pay` finds `payments-retry`) or a glob.
+- **Jump straight to the agent.** `enter` takes you to the pane that needs you most.
+- **Message from anywhere.** `g` messages Gopher about a project and `i` its agent, in a popup
+  that closes when you send.
+- **Close and restore windows.** `c` snapshots a project's tmux window (layout, panes, the Claude
+  session id) and closes it. `o` brings it back with the agent resumed.
+- **Custom actions.** Add a header button that runs any shell command for the pinned project in a
+  popup, such as `git status` or your PR stack tool, scoped by checkout path.
+- **Safe archive and close.** Close removes only git worktrees with nothing to lose: it is
+  blocked by uncommitted changes or by commits that are on no remote. Every destructive step asks
+  you to type `yes`.
+- **Haiku summaries.** `r` asks Haiku for a one-line summary of any project; `l` expands a
+  project into a detail view.
+- **Gopher's record.** Gopher keeps a daily journal of what you told it and where it went, gives
+  you a morning briefing and an end-of-day wrap, and can be `quiet`, `nudge`, or `proactive`
+  about stalled projects.
+
+<p align="center">
+  <img src="docs/images/sidebar.png" alt="The sidebar pinned to api-v2-migration, with Priority and Projects sections below" width="380">
+  &nbsp;
+  <img src="docs/images/dashboard.png" alt="gopher tui as a full-width dashboard" width="520">
+</p>
+
+*Above: made-up projects in every state. Green is active, yellow waiting on review, red blocked.
+On the right of each block: needs input, done (finished, not yet seen), needs login, working,
+idle.*
+
+## Requirements
+
+- **[Claude Code](https://docs.claude.com/en/docs/claude-code)** on your `PATH` as `claude`.
+  Agent-to-agent messaging needs v2.1.224 or later.
+- **tmux.** Developed on 3.8; older versions are untested.
+- **Python 3.11+** and **[uv](https://docs.astral.sh/uv/)**.
+- **git.**
+- Optional: **[tmux-resurrect](https://github.com/tmux-plugins/tmux-resurrect)** for closing and
+  reopening project windows. **tmux-assistant-resurrect** additionally records Claude session ids,
+  so reopened windows resume their agent.
+
+Developed on Linux; macOS is untested. gopher has had one user so far, so expect rough edges
+(see [Known issues](#known-issues)).
+
+## Getting started
 
 ```bash
-uv tool install --editable .
+# 1. Install
+uv tool install git+https://github.com/Peaches491/claude-gopher
+
+# 2. Create a root, install the Claude Code hooks, and let Claude interview you about your setup
+gopher setup                    # asks where the root goes (default ~/workon)
+
+# 3. Shell integration (add to ~/.zshrc or ~/.bashrc)
+eval "$(gopher shell-init zsh)" # the gopher function and completion; bash works too
+alias workon='gopher workon'
+
+# 4. tmux integration (add to ~/.tmux.conf, then reload tmux)
+#    source-file /path/to/claude-gopher/examples/tmux.conf
 ```
 
-## Session state hook
+[`examples/tmux.conf`](examples/tmux.conf) starts Gopher whenever a client attaches and links its
+window at index 0. It also binds `prefix g` to a popup on Gopher, replacing tmux 3.8's default
+`prefix g`.
 
-`gopher hook state` records each Claude Code session's state (`idle`, `working`, `waiting`) in
-`<state_dir>/sessions/<session_id>.json`. Register it for these events in `~/.claude/settings.json`
-(see `gopher hook state --print-settings`): SessionStart, UserPromptSubmit, PreToolUse,
-PostToolUse, PermissionRequest, Notification, Stop, SessionEnd.
-
-Live sessions are also read from Claude Code's own registry (`~/.claude/sessions/<pid>.json`,
-undocumented), so sessions that started before the hook was installed still show up. Hook records
-add the project and win when newer. If the registry is missing, gopher falls back to hook records.
+Then make a project and open it:
 
 ```bash
-gopher agents              # running agents (WINDOW = window.pane name)
-gopher list                # project names and summaries (--names for scripts)
-gopher projects            # overview: state, agents, unread inbox (! = wake), checkouts, summary
+gopher project new my-feature --checkout ~/src/myrepo-my-feature
+workon term my-feature          # in a tmux window: sidebar on the left, agent on the right
 ```
 
-## Roots and projects
+That's the daily loop: one window per project, Gopher in window 0, and `prefix g` to talk to
+Gopher from anywhere.
 
-A deployment lives in a root directory, meant to be its own git repo: `config.toml`, `prompts/`,
-`projects/`, `gopher/`, and a gitignored `tmp/`. Roots are named in
-`$XDG_CONFIG_HOME/claude-gopher/config.toml`; pick one with `--root` or `$GOPHER_HOME`.
+## Concepts
+
+### Roots
+
+A root holds a deployment: `config.toml`, `prompts/` (your site's text, appended to the core
+prompts), `projects/`, `archived/`, `closed/`, `gopher/` (Gopher's own directory and journal),
+`reference/` (a shared library of playbooks), and a gitignored `tmp/`. Roots are registered in
+`$XDG_CONFIG_HOME/claude-gopher/config.toml`. Pick one with `--root` or `$GOPHER_HOME`; inside a
+root, commands find it themselves.
 
 ```bash
-gopher setup                            # create or adopt a root, install hooks, interview to configure
-gopher setup --review                   # re-run the interview on an existing root
-gopher new ~/workon                     # scriptable: create, git init, register (or --from <git-url>)
-gopher project new my-feature --checkout ~/src/repo-my-feature
-gopher project rename my-feature better-name
-gopher checkout move ~/src/repo-my-feature other-project
+gopher setup --review           # re-run the setup interview on an existing root
+gopher new ~/work2 --name work2 # scriptable: create, git init, register (or --from <git-url>)
+```
+
+### Projects
+
+```
+projects/<name>/
+  STATUS.md        the agent's view: frontmatter (summary, state, updated) and where things stand
+  human/           yours; agents read it and never write it (Gopher may, on your behalf)
+  plan/ notes/     living plans; dated records of what happened
+  resources/       one file per PR, ticket, doc, or dashboard the project uses
+  inbox/           items for the project's agent; handled ones move to inbox/read/
+  checkouts.toml   the git checkouts this project owns
+```
+
+`STATUS.md` frontmatter drives the sidebar:
+
+```yaml
+---
+summary: One sentence on where the project stands.
+state: active | blocked | waiting-review | closing
+updated: 2026-11-17
+---
+```
+
+```bash
+gopher projects                         # overview: state, agents, unread inbox, checkouts, summary
+gopher agents                           # running agents and their tmux panes
+gopher project new <name> [--checkout <path>]
+gopher project rename <old> <new>       # also renames its windows and session records
+gopher project priority <name> [0-3|+|-]
+gopher checkout add <project> <path>    # or `gopher checkout add <path>` from inside a project dir
+gopher checkout move <path> <project>
 gopher checkout list
 ```
 
-Checkouts are never written to; ownership lives in `projects/<p>/checkouts.toml`.
+### Agents and context
 
-## Gopher and the TUI
+`gopher setup` installs Claude Code hooks (`gopher hook state|context|inbox`) in
+`~/.claude/settings.json`:
+
+- `context` tells every session in a project what the project is, where its files go, and what
+  is in its inbox.
+- `state` records whether each agent is working, waiting, or idle.
+- `inbox` delivers new items as they arrive.
+
+`gopher prompt <context>` prints the assembled instructions for any context.
 
 ```bash
-gopher launch                           # start the gopher tmux session; link its window at index 0
-gopher tui                              # the dashboard (gopher launch runs it in the left pane)
+workon agent my-feature -- --model opus  # an agent for the project in this terminal
+workon source                            # cd + activate the checkout (finds the project from $PWD)
 ```
 
-Source `examples/tmux.conf` from your tmux config for the `prefix g` popup and to run
-`gopher launch` whenever a client attaches. Gopher runs `claude --model sonnet` by default; set
-`[gopher] model` in the root's `config.toml` to change it.
+`[agents.<name>]`, `[[checkouts.setup]]`, and `[workon] pre_launch` in the root's `config.toml`
+control how agents start.
 
-`gopher workon term` lays a project window out as the sidebar (left) and the agent;
-`gopher workon sidebar --all` adds the sidebar to open windows.
+### Inbox
 
-Sidebar keys: `j`/`k` move, `enter` jump to the project, `o` open its window (restoring the last
-snapshot) or jump to it, `c` close its window (after a y/n), `+`/`-` raise or lower its priority, `/` filter the list
-(letters in order, or a glob; enter keeps the filter, escape clears it), `l` expand, `g` message Gopher about it,
-`i` message its agent (both in a popup that closes when you send), `m`/`M` file an inbox item, `x`
-mark finished work seen, `r` one-line Haiku summary, `P` cycle Gopher's proactivity, `q` quit.
-`k` at the top of the list moves into the header buttons; there `h`/`l` move between them and
-`j` returns to the list (`k` stays put); a focused button shows a one-line hint below the row. For the pinned project: `b` inbox, `n` new inbox item, `u` refresh STATUS, `e` edit
-`human/STATUS.md`, `Q` close this tab (after a y/n; `o` restores it), plus any custom actions from the root `config.toml`. Each one is a header
-button and a hotkey that runs a shell command for the pinned project in a tmux popup:
+```bash
+gopher inbox add my-feature "rebase onto main when CI is green"   # mentioned on the next prompt
+gopher inbox add my-feature --wake "stop: the API changed"        # delivered when the agent stops
+gopher inbox list
+```
+
+Usually you just tell Gopher, which files these for you.
+
+## The sidebar
+
+`gopher tui --project <name>` is the sidebar. `workon term` starts one for you, and
+`workon sidebar --all` adds one to every open project window. `gopher tui` without `--project`
+is a full-width dashboard.
+
+| Key | In the list |
+|---|---|
+| `j` / `k` | move (`k` at the top moves into the header) |
+| `enter` | jump to the project's agent pane (and clear the search) |
+| `/`, `escape` | filter the list; clear the filter |
+| `+` / `-` | raise or lower priority |
+| `o` / `c` | open the project's window (restoring its snapshot) / close it |
+| `g` / `i` | message Gopher about it / message its agent |
+| `m` / `M` | file an inbox item |
+| `l` | expand into a detail view |
+| `r` | one-line Haiku summary |
+| `x` | mark finished work seen |
+| `P` | cycle Gopher's proactivity |
+| `q` | quit the sidebar |
+
+| Key | For the pinned project (also header buttons) |
+|---|---|
+| `h` / `l` | move between buttons; a hint below says what each does |
+| `b` | show its inbox |
+| `n` | new inbox item |
+| `u` | ask its agent to refresh `STATUS.md` |
+| `e` | edit `human/STATUS.md` in a popup |
+| `.` | More: `Q` close this tab, `A` archive, `X` close project |
+
+After a minute without input the sidebar resets to its header and the top of the list. Done
+counts as seen after the agent's pane has had focus for a few seconds.
+
+### Custom actions
+
+Add buttons that run shell commands for the pinned project in a tmux popup:
 
 ```toml
 [[tui.actions]]
 key = "s"
 label = "Status"
-command = "git status --short"
-cwd = "checkout"   # "checkout" (the project's first checkout, default) or "project"
-match = "~/src/*"   # optional: only for projects with a checkout matching this glob
-description = "Show uncommitted changes"   # optional: shown when the button is focused
+command = "git status --short --branch"
+cwd = "checkout"          # "checkout" (default) or "project"
+match = "~/src/*"         # optional: only projects with a checkout matching this glob
+description = "Show uncommitted changes"   # shown when the button is focused
 ```
 
-Other projects' blocks show the summary cut to `[tui] summary_lines` rows (default 2; 0 hides it).
-After `[tui] idle_seconds` (default 60) without input, a sidebar returns to its header and the
-top of the list. For gopher development, `[dev] reload = true` (with `uv tool install -e
-'.[dev]'`) makes sidebars restart when you run `gopher dev reload`, which first checks the TUI
-starts.
-An agent's "done" counts as seen once its pane has had focus for `[tui] seen_dwell_seconds`
-(default 5).
+The command runs in the first matching checkout with `GOPHER_ROOT`, `GOPHER_PROJECT`, and
+`GOPHER_PROJECT_DIR` set. A key that clashes with a built-in is skipped with a warning.
 
-With `match`, the button shows only when the project has a matching checkout, and the command
-runs in the first one that matches. The command gets `GOPHER_ROOT`, `GOPHER_PROJECT`, and `GOPHER_PROJECT_DIR` in its environment. A
-key that clashes with a built-in key is skipped with a warning.
+### Settings
 
-## Archive, close, reopen
+```toml
+[tui]
+summary_lines = 2         # summary rows per project block (0 hides it)
+idle_seconds = 60         # reset to the header after this long without input (0 never)
+seen_dwell_seconds = 5    # pane focus needed before "done" counts as seen
 
-`gopher archive|close|reopen <project>` print the plan, then ask you to type `yes` (agents pass
-`--yes` only after you approve the plan; `--dry-run` only prints it). Archive moves the project to
-`archived/` and runs `[lifecycle] on_archive` in its checkouts. Close runs `on_close`, removes the
-project's git worktrees (`git worktree remove`, no force; then `git branch -d`), runs `on_remove`,
-and moves it to `closed/`; plain clones, `[checkouts] protected` paths, and checkouts another
-project owns are kept. Uncommitted changes or commits on no remote block a close. An open project
-window is snapshotted and closed first. Lifecycle commands get `GOPHER_PROJECT`,
-`GOPHER_CHECKOUT`, and `GOPHER_ROOT`. In the sidebar: `A` archive and `X` close the window's own
-project (header buttons with hints). Every TUI confirmation wants `yes` typed.
+[gopher]
+model = "sonnet"          # model for the Gopher session
+proactivity = "quiet"     # quiet | nudge | proactive
+save_every_hours = 2      # how often Gopher runs gopher save (0 turns it off)
+```
 
-## Saving the root
+## Project lifecycle
 
-`gopher save` commits the root's changes, one commit per project (`alpha: update STATUS, plan`)
-plus one for the root's own files, then pushes to the branch's upstream (`--no-push` to skip,
-`--dry-run` to preview). It refuses while a merge or rebase is in progress. Gopher runs it every
-`[gopher] save_every_hours` (default 2; 0 turns the timer off) via a session-scoped CronCreate
-job, at the end-of-day wrap, and on request; project agents commit there only when asked.
+```bash
+gopher archive <project>   # park it: move to archived/, run [lifecycle] on_archive in its checkouts
+gopher close <project>     # end it: run on_close, remove its git worktrees, move to closed/
+gopher reopen <project>    # bring an archived or closed project back
+```
 
-## Priority
+Each command prints its plan and waits for you to type `yes`. Use `--dry-run` to only print it.
+Agents pass `--yes` only after you have approved the plan.
 
-`gopher project priority <project> [0-3|+|-]` shows or sets a project's priority, stored as
-`priority:` in its `human/STATUS.md` frontmatter. Starred projects get their own section at the
-top of the TUI, most stars first, with the usual colour order inside each level.
+Close is conservative:
+- It runs `git worktree remove` without force, then `git branch -d`.
+- It keeps plain clones, paths listed in `[checkouts] protected`, and checkouts another project
+  also owns.
+- Uncommitted changes, or commits that are on no remote, block it.
+- An open project window is snapshotted and closed first.
+
+Hooks get `GOPHER_PROJECT`, `GOPHER_CHECKOUT`, and `GOPHER_ROOT`:
+
+```toml
+[lifecycle]
+on_archive = ["make clean"]
+on_close = []
+on_remove = []            # runs in the main checkout after each worktree is removed
+```
 
 ## Project windows
 
-`gopher workon close <project>` triggers a tmux-resurrect save, keeps that window's part of it
-(layout, pane directories, which pane is the sidebar, the Claude session id recorded by
-tmux-assistant-resurrect) in `tmp/gopher/windows/<project>.json`, then closes the window.
-`gopher workon open <project>` rebuilds the window from that snapshot, back at its old index when
-free, and resumes the agent with `--resume`; with no snapshot it opens the standard sidebar and
-agent layout. `gopher workon snapshot <project>` saves without closing. Needs tmux-resurrect
-(and tmux-assistant-resurrect for the session ids).
-
-## Prompts
-
-Core instructions for each context (`all`, `project`, `gopher`, `resources`, `archive`, `close`,
-`reopen`, `inbox`, `tui-summary`) ship with gopher; a root adds site text in
-`prompts/<context>.md`. `gopher prompt <context>` prints the result. `gopher hook context`
-(installed by `gopher setup`) injects `all` + `project` into project sessions at SessionStart.
-
-## workon
-
 ```bash
-eval "$(gopher shell-init zsh)"          # in ~/.zshrc: gopher function + completion
-alias workon='gopher workon'             # optional
-workon term my-feature                   # tmux: STATUS editor, shell, agent
-workon agent my-feature -- --model opus  # agent here, with the session kickoff
-workon source my-feature                 # cd + activate the checkout
+gopher workon close <project>     # snapshot the window via tmux-resurrect, then close it
+gopher workon open <project>      # rebuild it from the snapshot, back at its old index, agent resumed
+gopher workon snapshot <project>  # snapshot without closing
 ```
 
-Agents, per-checkout setup commands, and pre-launch commands live in the root's `config.toml`.
+With no snapshot, `open` lays out the standard sidebar and agent.
 
-## Inbox
+## Saving the root
 
-```bash
-gopher inbox add my-feature "rebase onto main when CI is green"     # picked up on the next prompt
-gopher inbox add my-feature --wake "stop: the API changed"          # delivered when the agent stops
-gopher inbox list
-```
+`gopher save` commits the root's changes, one commit per project plus one for the root's own
+files, then pushes. `--no-push` skips the push; `--dry-run` previews. Gopher runs it every
+`save_every_hours`, at the end-of-day wrap, and when you ask. The root needs to be a git
+repository with an upstream to push to.
 
-`gopher hook inbox` (UserPromptSubmit, Stop) delivers items; `gopher setup` installs it.
+## Known issues
+
+- tmux-resurrect does not understand linked windows. Restoring a tmux session may bring Gopher
+  back as two windows.
+- While a popup is open, the pane underneath it counts as focused, so its "done" can be marked
+  seen.
+- Restarting Gopher means killing its process; running `/exit` only backgrounds it. Then run
+  `gopher launch`.
 
 ## Development
 
 ```bash
+uv sync
 uv run pytest
+scripts/demo-render.sh            # regenerate the README images from made-up projects
 ```
+
+[docs/design.md](docs/design.md) is the design and its decisions.
+
+If you hack on the sidebar, there is an opt-in reloader:
+1. Set `[dev] reload = true` in the root's `config.toml`.
+2. Install with `uv tool install -e '.[dev]'`.
+3. Run `gopher dev reload`. It checks that the TUI starts, then restarts every running sidebar on
+   the new code.
+
+## License
+
+[MIT](LICENSE)

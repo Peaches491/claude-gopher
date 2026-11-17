@@ -14,7 +14,7 @@ from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Horizontal, HorizontalScroll, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
 from textual.widgets import Button, Footer, Input, ListItem, ListView, Markdown, OptionList, Rule, Static
 from textual.widgets.option_list import Option
@@ -534,6 +534,10 @@ def custom_hint(custom: CustomAction) -> str:
     return custom.description or f"Run `{custom.command}` in a popup"
 
 
+class ButtonRow(HorizontalScroll, can_focus=False):
+    pass
+
+
 class HeaderButtons(Vertical):
     BINDINGS = [
         Binding("h,left", "cycle(-1)", "Prev", show=False),
@@ -570,7 +574,7 @@ class PinnedHeader(Vertical):
             yield Static(classes="agents")
         yield Static(id="pinned-text", classes="body")
         with HeaderButtons(id="pinned-buttons"):
-            with Horizontal(classes="button-row"):
+            with ButtonRow(classes="button-row"):
                 for index, custom in enumerate(self.actions):
                     button = Button(f"{custom.key} {custom.label}", action=f"app.custom({index})", compact=True, id=f"custom-{index}")
                     button.hint = custom_hint(custom)
@@ -734,8 +738,8 @@ class GopherTUI(App):
     PinnedHeader .agents { width: auto; padding-left: 1; }
     PinnedHeader .body { height: auto; padding-left: 2; }
     #pinned-buttons { height: auto; margin: 1 0 0 0; }
-    #pinned-buttons .button-row { height: 1; }
-    #pinned-buttons Button { margin-right: 2; min-width: 0; width: auto; }
+    #pinned-buttons .button-row { height: 1; scrollbar-size-horizontal: 0; }
+    #pinned-buttons Button { margin-right: 1; min-width: 0; width: auto; }
     #button-hint { display: none; height: auto; padding-left: 1; }
     #button-hint.open { display: block; }
     #pinned-inbox { height: auto; max-height: 10; display: none; }
