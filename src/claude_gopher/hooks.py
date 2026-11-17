@@ -48,6 +48,29 @@ def plan_hooks(settings: dict, binary: str) -> tuple[dict, list[str]]:
     return updated, added
 
 
+def unplan_hooks(settings: dict) -> tuple[dict, list[str]]:
+    updated = copy.deepcopy(settings)
+    hooks = updated.get("hooks", {})
+    removed = []
+    for event in list(hooks):
+        kept_entries = []
+        for entry in hooks[event]:
+            commands = entry.get("hooks", [])
+            kept = [h for h in commands if not any(is_gopher_hook(h.get("command", ""), name) for name in HOOKS)]
+            removed += [f"{event}: {h['command']}" for h in commands if h not in kept]
+            if kept:
+                kept_entries.append({**entry, "hooks": kept})
+            elif not commands:
+                kept_entries.append(entry)
+        if kept_entries:
+            hooks[event] = kept_entries
+        else:
+            del hooks[event]
+    if "hooks" in updated and not hooks:
+        del updated["hooks"]
+    return updated, removed
+
+
 def read_settings(path: Path) -> dict:
     return json.loads(path.read_text()) if path.is_file() else {}
 

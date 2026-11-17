@@ -357,6 +357,16 @@ def add_sidebar(config: Config, window: str, project: str, replace: bool = False
     return f"{project}: sidebar added{note}"
 
 
+def restart_sidebar(config: Config, window: str, project: str) -> str:
+    panes = [line.split("\t") for line in tmux("list-panes", "-t", window, "-F", "#{pane_id}\t#{pane_current_command}").splitlines()]
+    sidebar = next((pane for pane, command in panes if command in SIDEBAR_COMMANDS), None)
+    if not sidebar:
+        return f"{project}: no sidebar to restart"
+    tmux("respawn-pane", "-k", "-t", sidebar, "-c", str(config.projects_dir / project))
+    send(sidebar, sidebar_command(config, project))
+    return f"{project}: sidebar restarted"
+
+
 def run_lines(lines: list[str]) -> None:
     shell = os.environ.get("SHELL") or "/bin/sh"
     script = "\n".join([*lines[:-1], f"exec {lines[-1]}"])
@@ -372,7 +382,7 @@ ACTIONS = {
     "term": "lay out this tmux window: the gopher sidebar and the agent",
     "source": "cd to a project's checkout and activate it (needs gopher shell-init)",
     "where": "list projects and their checkouts",
-    "sidebar": "add the gopher sidebar to open project windows (--replace closes their shell/editor panes)",
+    "sidebar": "add the gopher sidebar to open project windows (--replace closes their shell/editor panes; --restart reloads running ones)",
     "open": "open a project's tmux window, restoring its last snapshot (layout, resumed agent)",
     "close": "snapshot a project's tmux window from tmux-resurrect, then close it",
     "snapshot": "save a project's window snapshot from tmux-resurrect without closing it",

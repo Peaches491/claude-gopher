@@ -2,7 +2,7 @@ import re
 from importlib import resources
 from pathlib import Path
 
-from claude_gopher.config import Config, gopher_features, gopher_proactivity, gopher_save_every_hours
+from claude_gopher.config import Config, gopher_features, gopher_proactivity, gopher_save_every_hours, gopher_update_check
 
 CONTEXTS = ("all", "gopher", "project", "resources", "archive", "close", "reopen", "inbox", "tui-summary", "tui-detail", "setup")
 SESSION_CONTEXTS = {"gopher": ("all", "gopher"), "project": ("all", "project")}
@@ -29,6 +29,7 @@ def variables(config: Config, project: str | None) -> dict[str, str]:
         "prompts_dir": config.prompts_dir,
         "reference_dir": config.reference_dir,
         "save_every_hours": gopher_save_every_hours(config),
+        "update_check": "on" if gopher_update_check(config) else "off",
         "tmp_dir": config.root / "tmp",
         "project": project or "<project>",
         "project_dir": config.projects_dir / (project or "<project>"),

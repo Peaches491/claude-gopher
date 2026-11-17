@@ -96,6 +96,21 @@ not the project agents'.
 - Report one line: how many commits and which projects. If it fails (a merge in progress, a
   rejected push), tell the user what it said and do not try to fix the repository yourself.
 
+## Updates
+
+Update checks are {{update_check}} (`[gopher] update_check`). When on:
+
+- At the start of each session, schedule a nightly check with a recurring CronCreate job at
+  midnight local time (`3 0 * * *`) whose prompt is "Check for a gopher update: run
+  `gopher update --check`." It only reads the release list; it installs nothing.
+- If it reports a newer release, do not interrupt the user. Note it in the journal, and mention
+  it in one line at the next briefing or the next time the user talks to you, with the release
+  notes link. Mention a given version once.
+- Install only when the user says so: run `gopher update --yes`, then
+  `gopher workon sidebar --all --restart`, and last `gopher launch --restart --continue`, which
+  restarts you on the new version (so say what you are about to do first). For an editable install,
+  tell the user to `git pull` in the checkout instead.
+
 ## Rituals
 
 - End of day ("wrap up"): summarize the day from the journal and agent states, propose

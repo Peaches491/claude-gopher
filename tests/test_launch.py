@@ -56,6 +56,8 @@ class FakeTmux:
         elif command == "new-session":
             self.sessions["gopher"] = [("1", "@9", "gopher")]
             stdout = "%1"
+        elif command == "list-panes":
+            stdout = "%1"
         elif command == "split-window":
             stdout = "%2"
         elif command == "link-window":
@@ -169,3 +171,19 @@ def test_relink_leaves_occupied_zero_alone(config, monkeypatch):
     monkeypatch.setattr(launch, "tmux", fake)
     assert launch.relink("main") is None
     assert not any(c[0] == "move-window" for c in fake.calls)
+
+
+def test_restart_respawns_the_gopher_pane(config, monkeypatch):
+    fake = FakeTmux({"main": [("0", "@9", "gopher")], "gopher": [("1", "@9", "gopher")]})
+    monkeypatch.setattr(launch, "tmux", fake)
+    assert launch.restart(config, resume=True) == ["restarted Gopher in %1 (continuing its last conversation)"]
+    assert ("respawn-pane", "-k", "-t", "%1", "-c", str(config.agent_dir)) in fake.calls
+    sent = [c[-2] for c in fake.calls if c[0] == "send-keys"]
+    assert sent == [f"gopher --root {config.root} launch --exec-agent --continue"]
+    assert not any(c[0] in ("new-session", "link-window") for c in fake.calls)
+
+
+def test_restart_without_a_session_launches(config, monkeypatch):
+    fake = FakeTmux({"main": []})
+    monkeypatch.setattr(launch, "tmux", fake)
+    assert launch.restart(config, resume=False)[0] == "started gopher session (@9)"

@@ -4,7 +4,7 @@ import json
 import pytest
 
 from claude_gopher.config import load_registry
-from claude_gopher.hooks import plan_hooks
+from claude_gopher.hooks import plan_hooks, unplan_hooks
 from claude_gopher.roots import RootError, create_root
 from claude_gopher.roots import create_project
 from claude_gopher.setup import NEW, REVIEW, SetupIO, install_dir, kickoff_message, run_setup
@@ -40,7 +40,7 @@ class FakeIO:
 
 
 def setup_args(**overrides):
-    values = dict(dir=None, name=None, source=None, default=None, no_hooks=False, no_interview=False, review=False, yes=False)
+    values = dict(dir=None, name=None, source=None, default=None, no_hooks=False, no_interview=False, review=False, yes=False, remove_hooks=False)
     return argparse.Namespace(**{**values, **overrides})
 
 
@@ -120,3 +120,16 @@ def test_kickoff_message_describes_root(tmp_path):
     message = kickoff_message(root, REVIEW)
     assert "files: all.md." in message and "(alpha)" in message and "This is a review" in message
     assert (install_dir() / "prompts" / "setup.md").is_file()
+
+
+def test_remove_hooks_undoes_install_and_keeps_other_hooks(tmp_path):
+    original = {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "other.sh"}]}]}, "model": "x"}
+    installed, _ = plan_hooks(original, "/bin/gopher")
+    restored, removed = unplan_hooks(installed)
+    assert restored == original and len(removed) == len(HOOK_EVENTS) + 3
+    assert unplan_hooks(restored) == (original, [])
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps(installed))
+    fake = FakeIO()
+    assert run_setup(setup_args(remove_hooks=True, yes=True), fake.io(), settings=settings) == 0
+    assert json.loads(settings.read_text()) == original and "removed gopher hooks" in fake.said[-1]

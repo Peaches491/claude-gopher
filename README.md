@@ -54,7 +54,10 @@ worktree belongs to what. gopher is built around a few ideas:
   project into a detail view.
 - **Gopher's record.** Gopher keeps a daily journal of what you told it and where it went, gives
   you a morning briefing and an end-of-day wrap, and can be `quiet`, `nudge`, or `proactive`
-  about stalled projects.
+  about stalled projects. Optional features add an engineering notebook and a changelog of what
+  shipped (see [Settings](#settings)).
+- **Stays current.** Gopher checks for a new release every night and mentions it once; it
+  updates only when you say so.
 
 <p align="center">
   <img src="docs/images/sidebar.png" alt="The sidebar pinned to api-v2-migration, with Priority and Projects sections below" width="380">
@@ -74,7 +77,7 @@ idle.*
 - **Python 3.11+** and **[uv](https://docs.astral.sh/uv/)**.
 - **git.**
 - Optional: **[tmux-resurrect](https://github.com/tmux-plugins/tmux-resurrect)** for closing and
-  reopening project windows. **tmux-assistant-resurrect** additionally records Claude session ids,
+  reopening project windows. **[tmux-assistant-resurrect](https://github.com/timvw/tmux-assistant-resurrect)** additionally records Claude session ids,
   so reopened windows resume their agent.
 
 Developed on Linux; macOS is untested. gopher has had one user so far, so expect rough edges
@@ -84,7 +87,7 @@ Developed on Linux; macOS is untested. gopher has had one user so far, so expect
 
 ```bash
 # 1. Install
-uv tool install git+https://github.com/Peaches491/claude-gopher
+uv tool install git+https://github.com/Peaches491/claude-gopher@v0.1.0
 
 # 2. Create a root, install the Claude Code hooks, and let Claude interview you about your setup
 gopher setup                    # asks where the root goes (default ~/workon)
@@ -93,13 +96,14 @@ gopher setup                    # asks where the root goes (default ~/workon)
 eval "$(gopher shell-init zsh)" # the gopher function and completion; bash works too
 alias workon='gopher workon'
 
-# 4. tmux integration (add to ~/.tmux.conf, then reload tmux)
-#    source-file /path/to/claude-gopher/examples/tmux.conf
+# 4. tmux integration: add this line to ~/.tmux.conf, then reload tmux
+#    run-shell 'tmux source-file "$(gopher shell-init tmux --path)"'
 ```
 
-[`examples/tmux.conf`](examples/tmux.conf) starts Gopher whenever a client attaches and links its
-window at index 0. It also binds `prefix g` to a popup on Gopher, replacing tmux 3.8's default
-`prefix g`.
+The tmux config ([`examples/tmux.conf`](examples/tmux.conf); the line above sources the installed
+copy, so it follows updates) starts Gopher whenever a client attaches and links its window at index
+0. It also binds `prefix g` to a popup on Gopher, replacing tmux 3.8's default `prefix g`. tmux
+needs `gopher` on its `PATH`.
 
 Then make a project and open it:
 
@@ -252,7 +256,19 @@ seen_dwell_seconds = 5    # pane focus needed before "done" counts as seen
 model = "sonnet"          # model for the Gopher session
 proactivity = "quiet"     # quiet | nudge | proactive
 save_every_hours = 2      # how often Gopher runs gopher save (0 turns it off)
+update_check = true       # nightly check for a new gopher release
+features = []             # any of "notebook", "changelog"
 ```
+
+Gopher's optional features:
+- `notebook`: a daily engineering notebook in `gopher/notebook/YYYY-MM-DD.md`, with what you worked
+  on, decisions and why, findings, and links, by project. The journal records routing; the
+  notebook records the work.
+- `changelog`: `gopher/changelog.md`, one line per shipped thing (merged PR, closed ticket,
+  deploy), newest first, which the weekly review draws on.
+
+`gopher proactivity [quiet|nudge|proactive]` changes the proactivity level, as does `P` in the
+sidebar.
 
 ## Project lifecycle
 
@@ -298,14 +314,35 @@ files, then pushes. `--no-push` skips the push; `--dry-run` previews. Gopher run
 `save_every_hours`, at the end-of-day wrap, and when you ask. The root needs to be a git
 repository with an upstream to push to.
 
+## Updating
+
+```bash
+gopher update --check            # is there a newer release?
+gopher update                    # install it (asks you to type yes)
+gopher workon sidebar --all --restart
+gopher launch --restart --continue   # restart Gopher, keeping its conversation
+```
+
+Gopher runs the check nightly and does all of this for you when you say yes. An editable install
+(`uv tool install -e .`) is updated with `git pull` instead. `gopher launch --restart` without
+`--continue` starts Gopher fresh.
+
+## Uninstalling
+
+```bash
+gopher setup --remove-hooks      # take gopher's hooks out of ~/.claude/settings.json (backed up first)
+uv tool uninstall claude-gopher
+```
+
+Also remove the `run-shell` line from your tmux config and the `shell-init` line from your shell
+rc. Your roots are plain directories; keep or delete them as you like.
+
 ## Known issues
 
 - tmux-resurrect does not understand linked windows. Restoring a tmux session may bring Gopher
   back as two windows.
 - While a popup is open, the pane underneath it counts as focused, so its "done" can be marked
   seen.
-- Restarting Gopher means killing its process; running `/exit` only backgrounds it. Then run
-  `gopher launch`.
 
 ## Development
 

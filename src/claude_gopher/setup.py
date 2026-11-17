@@ -6,7 +6,7 @@ from pathlib import Path
 import claude_gopher
 from claude_gopher.checkouts import project_dirs
 from claude_gopher.config import DEFAULT_ROOT, load_config, load_registry, save_registry
-from claude_gopher.hooks import gopher_command, plan_hooks, read_settings, settings_path, write_settings
+from claude_gopher.hooks import gopher_command, plan_hooks, read_settings, settings_path, unplan_hooks, write_settings
 from claude_gopher.prompt import CONTEXTS, assemble
 from claude_gopher.roots import RootError, check_name, check_target, create_root, is_root, register_root, repair_root
 
@@ -79,6 +79,9 @@ def registered_name(registry, target: Path) -> str | None:
 
 
 def run_setup(args, io: SetupIO, settings: Path | None = None) -> int:
+    if args.remove_hooks:
+        remove_hooks(settings or settings_path(), io, args.yes)
+        return 0
     registry = load_registry()
     default_dir = str(registry.roots[registry.default]) if registry.default in registry.roots else DEFAULT_ROOT
     target = Path(args.dir or io.ask("Root directory", default_dir)).expanduser().resolve()
@@ -122,6 +125,19 @@ def run_setup(args, io: SetupIO, settings: Path | None = None) -> int:
     else:
         io.say("run `gopher setup --review` any time to configure this root's prompts")
     return 0
+
+
+def remove_hooks(path: Path, io: SetupIO, yes: bool) -> None:
+    updated, removed = unplan_hooks(read_settings(path))
+    if not removed:
+        io.say(f"no gopher hooks in {path}")
+        return
+    io.say(f"hooks to remove from {path}:\n" + "\n".join(f"  {line}" for line in removed))
+    if not (yes or io.confirm("Remove these hooks?", True)):
+        io.say("left the hooks in place")
+        return
+    backup = write_settings(path, updated)
+    io.say("removed gopher hooks" + (f" (backup: {backup})" if backup else ""))
 
 
 def install_hooks(path: Path, io: SetupIO, yes: bool) -> None:

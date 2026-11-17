@@ -81,10 +81,16 @@ def agent_lines(config: Config, passthrough: list[str]) -> list[str]:
     ]
 
 
-def exec_agent(config: Config, passthrough: list[str]) -> None:
+def exec_agent(config: Config, passthrough: list[str], resume: bool = False) -> None:
     ensure_agent_dir(config)
     write_prompt(config)
+    if resume and gopher_agent(config).name == "claude":
+        passthrough = ["--continue", *passthrough]
     run_lines(agent_lines(config, passthrough))
+
+
+def agent_command(config: Config, resume: bool = False) -> str:
+    return f"gopher --root {shlex.quote(str(config.root))} launch --exec-agent" + (" --continue" if resume else "")
 
 
 def has_session(name: str) -> bool:
@@ -98,9 +104,18 @@ def gopher_window() -> str:
 def create_session(config: Config) -> str:
     directory = str(config.agent_dir)
     agent = out("new-session", "-d", "-s", SESSION, "-n", WINDOW, "-c", directory, "-P", "-F", "#{pane_id}")
-    root = shlex.quote(str(config.root))
-    tmux("send-keys", "-t", agent, f"gopher --root {root} launch --exec-agent", "Enter")
+    tmux("send-keys", "-t", agent, agent_command(config), "Enter")
     return gopher_window()
+
+
+def restart(config: Config, resume: bool) -> list[str]:
+    if not has_session(SESSION):
+        return launch(config, None)
+    ensure_agent_dir(config)
+    pane = out("list-panes", "-t", gopher_window(), "-F", "#{pane_id}").splitlines()[0]
+    tmux("respawn-pane", "-k", "-t", pane, "-c", str(config.agent_dir))
+    tmux("send-keys", "-t", pane, agent_command(config, resume), "Enter")
+    return [f"restarted Gopher in {pane}" + (" (continuing its last conversation)" if resume else " (fresh session)")]
 
 
 def current_session() -> str | None:

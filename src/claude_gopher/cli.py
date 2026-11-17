@@ -18,7 +18,7 @@ from claude_gopher.prompt import CONTEXTS, assemble, is_gopher_session, session_
 from claude_gopher.roots import RootError, check_name, check_target, create_project, create_root, register_root
 from claude_gopher.overview import current_sessions, project_overview
 from claude_gopher.setup import SetupIO, launch_interview, run_setup
-from claude_gopher import devreload, launch, lifecycle, popup, rename, restore, rootgit, workon
+from claude_gopher import devreload, launch, lifecycle, popup, rename, restore, rootgit, update, workon
 from claude_gopher.state import (
     apply_event,
     hook_settings,
@@ -261,7 +261,11 @@ def cmd_workon_agent(args) -> int:
 def cmd_launch(args) -> int:
     config = root_config(args)
     if args.exec_agent:
-        launch.exec_agent(config, args.passthrough)
+        launch.exec_agent(config, args.passthrough, resume=args.resume)
+        return 0
+    if args.restart:
+        for line in launch.restart(config, args.resume):
+            print(f"gopher: {line}")
         return 0
     if args.relink:
         session = args.session or launch.current_session()
@@ -321,7 +325,10 @@ def cmd_workon_sidebar(args) -> int:
     if not windows:
         print("no open project windows matched")
     for window, project in windows:
-        print(workon.add_sidebar(config, window, project, replace=args.replace))
+        if args.restart:
+            print(workon.restart_sidebar(config, window, project))
+        else:
+            print(workon.add_sidebar(config, window, project, replace=args.replace))
     return 0
 
 
@@ -415,8 +422,16 @@ def cmd_workon_complete(args) -> int:
     return 0
 
 
+TMUX_CONF = Path(__file__).resolve().parent / "shell" / "tmux.conf"
+
+
 def cmd_shell_init(args) -> int:
-    print(workon.SHELL_INIT[args.shell], end="")
+    if args.path:
+        if args.shell != "tmux":
+            raise RootError("--path only applies to tmux")
+        print(TMUX_CONF)
+        return 0
+    print(TMUX_CONF.read_text() if args.shell == "tmux" else workon.SHELL_INIT[args.shell], end="")
     return 0
 
 
@@ -427,6 +442,33 @@ def cmd_commands(args) -> int:
 
 
 COMMANDS: dict = {}
+
+
+def cmd_update(args) -> int:
+    config = root_config(args)
+    try:
+        status = update.check(config)
+    except update.UpdateError as error:
+        raise RootError(str(error)) from error
+    print(status.describe())
+    if args.check or not status.available or status.editable:
+        return 0
+    print("install: " + " ".join(update.install_command(status)))
+    if not args.yes:
+        if not sys.stdin.isatty():
+            print("Nothing changed. Rerun with --yes once the user has approved the update.")
+            return 2
+        if not confirm(f"Update to v{status.latest}?"):
+            print("Nothing changed.")
+            return 1
+    try:
+        update.install(status)
+    except update.UpdateError as error:
+        raise RootError(str(error)) from error
+    print(f"installed v{status.latest}. Then, inside tmux:")
+    for line in update.AFTER_UPDATE:
+        print(f"  {line}")
+    return 0
 
 
 def cmd_lifecycle(args) -> int:
@@ -670,12 +712,15 @@ def build_parser() -> argparse.ArgumentParser:
     setup.add_argument("--no-hooks", action="store_true", help="do not offer to install Claude Code hooks")
     setup.add_argument("--no-interview", action="store_true", help="do not offer the setup interview")
     setup.add_argument("--review", action="store_true", help="only run the interview, revising an existing root")
+    setup.add_argument("--remove-hooks", action="store_true", help="remove gopher's Claude Code hooks from ~/.claude/settings.json (roots are left alone)")
     setup.add_argument("-y", "--yes", action="store_true", help="install hooks without asking")
     setup.set_defaults(func=cmd_setup)
 
     launcher = sub.add_parser("launch", help="start the Gopher agent's tmux session and link its window at index 0")
     launcher.add_argument("--session", help="tmux session to link into (default: the current one)")
     launcher.add_argument("--relink", action="store_true", help="only move the Gopher window back to index 0 if it drifted (for a window-unlinked hook)")
+    launcher.add_argument("--restart", action="store_true", help="restart the Gopher agent (picks up a new gopher version and prompt); its window and links stay")
+    launcher.add_argument("--continue", dest="resume", action="store_true", help="with --restart: continue Gopher's last conversation instead of starting fresh")
     launcher.add_argument("--exec-agent", action="store_true", help=argparse.SUPPRESS)
     launcher.set_defaults(func=cmd_launch, passthrough=[])
 
@@ -710,6 +755,11 @@ def build_parser() -> argparse.ArgumentParser:
     dev_reload.add_argument("--skip-smoke", action="store_true", help="publish without the headless start check")
     dev_reload.add_argument("--force", action="store_true", help="publish even if [dev] reload is off")
     dev_reload.set_defaults(func=cmd_dev_reload)
+
+    updater = sub.add_parser("update", help="check for a newer gopher release and install it")
+    updater.add_argument("--check", action="store_true", help="only report whether a newer release exists")
+    updater.add_argument("-y", "--yes", action="store_true", help="install without asking (agents: only after the user agrees)")
+    updater.set_defaults(func=cmd_update)
 
     saver = sub.add_parser("save", help="commit the root's changes (one commit per project, one for root files) and push")
     saver.add_argument("--no-push", action="store_true", help="commit only")
@@ -783,6 +833,7 @@ def build_parser() -> argparse.ArgumentParser:
     sidebar.add_argument("project", nargs="?")
     sidebar.add_argument("--all", action="store_true", help="every open project window")
     sidebar.add_argument("--replace", action="store_true", help="also close the window's shell and editor panes")
+    sidebar.add_argument("--restart", action="store_true", help="restart running sidebars on the installed gopher (after an update)")
     sidebar.set_defaults(func=cmd_workon_sidebar)
     open_window = workon_sub.add_parser("open", help=workon.ACTIONS["open"])
     open_window.add_argument("project")
@@ -804,7 +855,8 @@ def build_parser() -> argparse.ArgumentParser:
     complete.set_defaults(func=cmd_workon_complete, words=[])
 
     shell_init = sub.add_parser("shell-init", help="print shell integration: a gopher function (for workon source) and completion")
-    shell_init.add_argument("shell", choices=sorted(workon.SHELL_INIT))
+    shell_init.add_argument("shell", choices=sorted([*workon.SHELL_INIT, "tmux"]), help="bash or zsh: shell function and completion; tmux: hooks and the prefix g popup")
+    shell_init.add_argument("--path", action="store_true", help="tmux only: print the installed tmux.conf's path, to source-file it")
     shell_init.set_defaults(func=cmd_shell_init)
 
     commands = sub.add_parser("commands", help="list gopher commands (for completion)")

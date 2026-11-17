@@ -520,6 +520,18 @@ Scripts, not agents, do the destructive parts; agents/Gopher only propose them.
     user types `yes`.
 - **reopen**: move the project dir back to `<projects_dir>` (checkouts are not recreated).
 
+### 8. Updates and restarts
+
+Releases are `vX.Y.Z` tags on the source repo (`[gopher] update_source`). `gopher update --check`
+lists them with `git ls-remote`; `gopher update` installs the newest with
+`uv tool install --force git+<source>@<tag>` after a typed `yes` (editable installs are told to
+`git pull`). Gopher schedules the check nightly at midnight (`[gopher] update_check`, default on),
+mentions a new version once, and on the user's yes installs it, restarts the sidebars
+(`gopher workon sidebar --all --restart`, which respawns each sidebar pane), and restarts itself
+last (`gopher launch --restart --continue`, which respawns the Gopher pane with `claude --continue`).
+`gopher setup --remove-hooks` undoes the hook install. The tmux config ships in the package;
+`gopher shell-init tmux --path` locates it so tmux sources the installed copy.
+
 ## Build order
 
 0. Roots: `gopher new`, `gopher project new`, registry, `$GOPHER_HOME` discovery, root `config.toml`, `checkouts.toml` project

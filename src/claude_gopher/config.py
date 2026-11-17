@@ -207,6 +207,13 @@ def gopher_save_every_hours(config: Config) -> int:
     return hours
 
 
+def gopher_update_check(config: Config) -> bool:
+    value = config.settings.get("gopher", {}).get("update_check", True)
+    if not isinstance(value, bool):
+        raise ConfigError(f"[gopher] update_check must be true or false, not {value!r}")
+    return value
+
+
 def set_gopher_setting(root: Path, key: str, value: str) -> None:
     path = root / ROOT_CONFIG
     lines = path.read_text().splitlines() if path.is_file() else []
