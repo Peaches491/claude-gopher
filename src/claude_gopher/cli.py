@@ -18,7 +18,7 @@ from claude_gopher.prompt import CONTEXTS, assemble, is_gopher_session, session_
 from claude_gopher.roots import RootError, check_name, check_target, create_project, create_root, register_root
 from claude_gopher.overview import current_sessions, project_overview
 from claude_gopher.setup import SetupIO, launch_interview, run_setup
-from claude_gopher import launch, popup, rename, restore, rootgit, workon
+from claude_gopher import devreload, launch, lifecycle, popup, rename, restore, rootgit, workon
 from claude_gopher.state import (
     apply_event,
     hook_settings,
@@ -203,11 +203,13 @@ def cmd_new(args) -> int:
     return 0
 
 
-def confirm(prompt: str, default: bool) -> bool:
+CONFIRM_WORD = "yes"
+
+
+def confirm(prompt: str, default: bool = False) -> bool:
     if not sys.stdin.isatty():
         raise RootError(f"{prompt} needs an answer but there is no terminal; rerun with -y (or the matching --no-* flag)")
-    answer = ask(f"{prompt} {'Y/n' if default else 'y/N'}", "y" if default else "n")
-    return answer.lower().startswith("y")
+    return input(f"{prompt} Type {CONFIRM_WORD} to confirm: ").strip() == CONFIRM_WORD
 
 
 def cmd_setup(args) -> int:
@@ -409,6 +411,47 @@ def cmd_commands(args) -> int:
 
 
 COMMANDS: dict = {}
+
+
+def cmd_lifecycle(args) -> int:
+    config = root_config(args)
+    try:
+        plan = lifecycle.make_plan(config, args.action, args.project)
+    except lifecycle.LifecycleError as error:
+        raise RootError(str(error)) from error
+    print(lifecycle.describe(plan))
+    if plan.blockers:
+        return 1
+    if args.dry_run:
+        return 0
+    if not args.yes:
+        if not sys.stdin.isatty():
+            print(f"Nothing changed. Rerun with --yes once the user has approved this plan.")
+            return 2
+        if not confirm(f"{args.action.capitalize()} {args.project}?"):
+            print("Nothing changed.")
+            return 1
+    try:
+        report = lifecycle.execute(config, plan)
+    except lifecycle.LifecycleError as error:
+        raise RootError(str(error)) from error
+    for line in report:
+        print(f"  {line}")
+    return 0
+
+
+def cmd_dev_reload(args) -> int:
+    config = root_config(args)
+    if not devreload.enabled(config) and not args.force:
+        raise RootError("developer reload is off for this root; set [dev] reload = true in config.toml (or pass --force)")
+    project = args.project or os.environ.get("GOPHER_PROJECT")
+    print("smoke-starting the TUI..." if not args.skip_smoke else "skipping the smoke test")
+    try:
+        signal = devreload.publish(config, project, smoke=not args.skip_smoke)
+    except devreload.DevReloadError as error:
+        raise RootError(str(error)) from error
+    print(f"published {signal['token']} ({signal['sha'] or 'no git'}); sidebars with [dev] reload on will restart")
+    return 0
 
 
 def cmd_save(args) -> int:
@@ -633,6 +676,24 @@ def build_parser() -> argparse.ArgumentParser:
     proactivity = sub.add_parser("proactivity", help="show or set how proactive Gopher is ([gopher] proactivity)")
     proactivity.add_argument("level", nargs="?", choices=PROACTIVITY_LEVELS)
     proactivity.set_defaults(func=cmd_proactivity)
+
+    for action, summary in (
+        ("archive", "park a project: move it to the archive and run archive cleanup in its checkouts"),
+        ("close", "end a project: run close cleanup, remove its git worktrees, move it to closed"),
+        ("reopen", "move an archived or closed project back to the open projects"),
+    ):
+        lifecycle_parser = sub.add_parser(action, help=summary)
+        lifecycle_parser.add_argument("project")
+        lifecycle_parser.add_argument("--yes", action="store_true", help="skip the typed confirmation (only after the user approved the plan)")
+        lifecycle_parser.add_argument("--dry-run", action="store_true", help="print the plan and change nothing")
+        lifecycle_parser.set_defaults(func=cmd_lifecycle, action=action)
+
+    dev = sub.add_parser("dev", help="developer tools (opt-in with [dev] in config.toml)").add_subparsers(dest="dev_command", required=True)
+    dev_reload = dev.add_parser("reload", help="smoke-test the TUI, then tell every sidebar to restart onto the current code")
+    dev_reload.add_argument("--project", help="project to pin in the smoke test (default: $GOPHER_PROJECT)")
+    dev_reload.add_argument("--skip-smoke", action="store_true", help="publish without the headless start check")
+    dev_reload.add_argument("--force", action="store_true", help="publish even if [dev] reload is off")
+    dev_reload.set_defaults(func=cmd_dev_reload)
 
     saver = sub.add_parser("save", help="commit the root's changes (one commit per project, one for root files) and push")
     saver.add_argument("--no-push", action="store_true", help="commit only")

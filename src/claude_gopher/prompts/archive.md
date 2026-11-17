@@ -7,4 +7,6 @@ clearing build caches) runs in each one.
 - Propose archiving only when the work is paused or done; say why.
 - Before proposing, update `STATUS.md` so a future reader can pick the project back up: where it
   stands, what is unfinished, what to read first.
-- The user runs `gopher archive <project>`; do not move directories or clean checkouts yourself.
+- `gopher archive <project>` does the work. Run it without `--yes` first: it prints the plan and
+  changes nothing. Show the user the plan; only after they explicitly agree, run
+  `gopher archive <project> --yes`. Never move directories or clean checkouts yourself.

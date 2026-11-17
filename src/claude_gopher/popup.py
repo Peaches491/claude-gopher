@@ -69,6 +69,11 @@ def cleanup_command(socket: str, origin_window: str, target: str, unzoom: bool) 
     return "; ".join(steps)
 
 
+def guarded(body: str, cleanup: str) -> str:
+    script = f"cleanup() {{ {cleanup}; }}; trap cleanup EXIT; trap 'exit 130' INT HUP TERM; {body}"
+    return f"sh -c {shlex.quote(script)}"
+
+
 def open_popup(kind: str, origin: str, target: str | None = None, prefill: str = "", client: str | None = None) -> str:
     if kind == "gopher":
         target = gopher_agent_pane()
@@ -91,7 +96,7 @@ def open_popup(kind: str, origin: str, target: str | None = None, prefill: str =
     if prefill:
         tmux("set", "-g", AUTOCLOSE_OPTION, "1")
         tmux("send-keys", "-t", target, "-l", prefill)
-    command = f"{attach_command(target, kind)}; {cleanup_command(socket, origin_window, target, unzoom)}"
+    command = guarded(attach_command(target, kind), cleanup_command(socket, origin_window, target, unzoom))
     width, height = SIZE
     subprocess.Popen(
         ["tmux", "display-popup", "-c", client, "-E", "-s", "bg=terminal", "-S", "bg=terminal",
@@ -111,7 +116,7 @@ def command_popup(origin: str, cwd: Path | str, command: str, env: dict[str, str
     socket = value("display-message", "-p", "#{socket_path}")
     origin_window = value("display-message", "-p", "-t", origin, "#{window_id}")
     tmux("set", "-w", "-t", origin_window, "window-style", DIM_STYLE)
-    script = f"sh -c {shlex.quote(f'{command}; {CLOSE_PROMPT}')}; tmux -S {shlex.quote(socket)} set -wu -t {origin_window} window-style"
+    script = guarded(f"{command}; {CLOSE_PROMPT}", f"tmux -S {shlex.quote(socket)} set -wu -t {origin_window} window-style")
     env_args = [arg for key, setting in env.items() for arg in ("-e", f"{key}={setting}")]
     width, height = SIZE
     subprocess.Popen(

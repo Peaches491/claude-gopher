@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import os
 import time
+from pathlib import Path
 
 import pytest
 
@@ -194,9 +195,9 @@ def test_sidebar_pins_project_and_works_inbox(config, monkeypatch):
         await pilot.press("Q")
         await pilot.pause()
         assert isinstance(app.screen, tui.ConfirmScreen)
-        await pilot.press("n")
+        await pilot.press("y", "enter")
         assert not closed
-        await pilot.press("Q", "y")
+        await pilot.press("Q", "y", "e", "s", "enter")
         await app.workers.wait_for_complete()
         assert closed == ["alpha"]
 
@@ -314,16 +315,28 @@ def test_sidebar_binds_custom_actions(config, monkeypatch):
         assert any("already taken" in problem for problem in app.action_problems)
         buttons = [button for button in app.query("#pinned-buttons Button") if button.display]
         buttons[0].focus()
+        await pilot.pause()
+        hint = app.query_one("#button-hint", tui.Static)
+        assert hint.has_class("open") and "Run `pwd` in a popup" in str(hint.render())
         await pilot.press("l")
         assert app.focused is buttons[1]
+        note = next(b for b in buttons if str(b.label) == "n Note")
+        note.focus()
+        await pilot.pause()
+        assert "new inbox item" in str(hint.render())
+        buttons[1].focus()
         await pilot.press("left", "h")
         assert app.focused is buttons[-1]
         await pilot.press("j")
         assert app.focused is app.project_list()
+        await pilot.pause()
+        assert not hint.has_class("open")
         await pilot.press("k")
         assert app.focused is buttons[0]
         await pilot.press("down")
         await pilot.press("up")
+        assert app.focused is buttons[0]
+        await pilot.press("k", "up")
         assert app.focused is buttons[0]
         await pilot.press("j")
         await pilot.press("w")
@@ -483,8 +496,8 @@ def test_open_and_close_project_windows(config, monkeypatch):
         await pilot.press("c")
         await pilot.pause()
         assert isinstance(app.screen, tui.ConfirmScreen)
-        await pilot.press("n")
-        await pilot.press("c", "y")
+        await pilot.press("escape")
+        await pilot.press("c", "y", "e", "s", "enter")
         await app.workers.wait_for_complete()
         assert closed == ["beta"]
 
@@ -544,6 +557,9 @@ def test_search_filters_and_clears(config, monkeypatch):
     rows = [project("wfe-view"), project("atlas-app"), project("wfe")]
     monkeypatch.setattr(tui, "project_overview", lambda config: rows)
     stub_tmux(monkeypatch)
+    jumps = []
+    monkeypatch.setattr(tui.popup, "jump_to", jumps.append)
+    monkeypatch.setattr(tui, "project_window_ids", lambda name: [("@1", name)])
     app = tui.GopherTUI(config)
 
     async def steps(app, pilot):
@@ -560,45 +576,121 @@ def test_search_filters_and_clears(config, monkeypatch):
         await pilot.press("escape")
         await pilot.pause()
         assert app.search == "" and len(app.cards()) == 3
+        await pilot.press("slash", "a", "t", "enter")
+        await pilot.pause()
+        assert [c.project_name for c in app.cards()] == ["atlas-app"]
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.pause()
+        assert jumps == ["@1"] and app.search == "" and len(app.cards()) == 3
+        assert not app.search_box().has_class("open")
 
     drive_app(app, steps)
 
 
-def test_reloads_when_code_changes_and_imports(config, monkeypatch):
+def test_dev_reload_bounces_only_on_a_new_token(config, monkeypatch):
     monkeypatch.setattr(tui, "project_overview", lambda config: [project("alpha")])
     stub_tmux(monkeypatch)
     app = tui.GopherTUI(config)
-    started = []
-    monkeypatch.setattr(app, "run_worker", lambda work, **kwargs: kwargs.get("group") == "reload" and started.append(work))
 
     async def steps(app, pilot):
-        monkeypatch.setattr(tui, "source_stamp", lambda: time.time())
-        app.check_reload()
-        assert not started
-        changed = time.time() - 5
-        monkeypatch.setattr(tui, "source_stamp", lambda: changed)
-        app.stamp = changed - 10
-        app.check_reload()
-        assert started == [app.try_reload] and app.stamp == changed
-        app.check_reload()
-        assert len(started) == 1
+        assert not app.workers or all(w.group != "dev-reload" for w in app.workers)
+        app.reload_signalled({"token": app.token})
+        assert app.pending_reload is None
+        app.reload_signalled({"token": "new"})
+        await pilot.press("slash")
+        app.reload_if_pending()
+        assert not app.reloading
+        await pilot.press("escape")
+        await pilot.pause()
+        monkeypatch.setattr(app, "exit", lambda *args, **kwargs: None)
+        app.reload_if_pending()
+        assert app.reloading
+
+    drive_app(app, steps)
+
+def test_lifecycle_buttons_plan_confirm_and_run(config, monkeypatch):
+    pinned = {**project("alpha"), "path": str(config.projects_dir / "alpha")}
+    monkeypatch.setattr(tui, "project_overview", lambda config: [pinned])
+    stub_tmux(monkeypatch)
+    plan = tui.lifecycle.Plan("archive", "alpha", config.projects_dir / "alpha", config.archived_dir / "alpha", None, [])
+    monkeypatch.setattr(tui.lifecycle, "make_plan", lambda config, action, name: plan)
+    ran = []
+    monkeypatch.setattr(tui.lifecycle, "execute", lambda config, p: ran.append(p.action) or ["moved"])
+    app = tui.GopherTUI(config, pinned="alpha")
+
+    async def steps(app, pilot):
+        labels = [str(b.label) for b in app.query("#pinned-buttons Button")]
+        assert ". More" in labels and "A Archive" not in labels and "Q Close tab" not in labels
+        more = next(b for b in app.query("#pinned-buttons Button") if str(b.label) == ". More")
+        more.focus()
+        await pilot.pause()
+        assert "archive the project" in str(app.query_one("#button-hint", tui.Static).render())
+        await pilot.press("full_stop")
+        await pilot.pause()
+        assert isinstance(app.screen, tui.MoreScreen)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, tui.MoreScreen)
+        await pilot.press("full_stop")
+        await pilot.pause()
+        await pilot.press("j", "enter")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert isinstance(app.screen, tui.ConfirmScreen) and "Archive alpha" in app.screen.question
+        await pilot.press("escape")
+        await pilot.pause()
+        await pilot.press("A")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert isinstance(app.screen, tui.ConfirmScreen) and "Archive alpha" in app.screen.question
+        await pilot.press("n", "o", "enter")
+        await pilot.pause()
+        assert ran == []
+        await pilot.press("A")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        await pilot.press("y", "e", "s", "enter")
+        await app.workers.wait_for_complete()
+        assert ran == ["archive"]
 
     drive_app(app, steps)
 
 
-def test_try_reload_only_with_importable_code(config, monkeypatch):
-    monkeypatch.setattr(tui, "project_overview", lambda config: [project("alpha")])
+def test_checkouts_text_marks_agent_and_missing(tmp_path):
+    here, gone = tmp_path / "here", tmp_path / "gone"
+    here.mkdir()
+    row = {**project("alpha", [{"state": "idle", "cwd": str(here / "src")}]), "checkouts": [str(here), str(gone)]}
+    text = tui.checkouts_text(row).plain
+    assert text.startswith("\ncheckouts")
+    assert f"\u25b8 {here}" in text and f"  {gone}  missing" in text
+    assert tui.checkouts_text({**row, "checkouts": []}).plain == ""
+    assert tui.home_relative(str(Path.home() / "x")) == "~/x"
+
+
+def test_idle_returns_focus_to_header(config, monkeypatch):
+    pinned = {**project("alpha"), "path": str(config.projects_dir / "alpha")}
+    monkeypatch.setattr(tui, "project_overview", lambda config: [pinned, project("beta"), project("gamma")])
     stub_tmux(monkeypatch)
-    app = tui.GopherTUI(config)
-    calls = []
+    app = tui.GopherTUI(config, pinned="alpha")
 
     async def steps(app, pilot):
-        monkeypatch.setattr(app, "call_from_thread", lambda fn, *args, **kwargs: calls.append(fn.__name__))
-        monkeypatch.setattr(tui, "new_code_imports", lambda: False)
-        app.try_reload()
-        assert not app.reloading and calls == ["notify"]
-        monkeypatch.setattr(tui, "new_code_imports", lambda: True)
-        app.try_reload()
-        assert app.reloading and calls[-1] == "exit"
+        app.project_list().focus()
+        await pilot.press("j")
+        assert app.selected()["name"] == "gamma"
+        app.refocus_when_idle()
+        assert app.focused is app.project_list()
+        app.last_input -= app.idle_after + 1
+        await pilot.press("slash")
+        app.last_input -= app.idle_after + 1
+        app.refocus_when_idle()
+        assert app.focused is app.search_box()
+        await pilot.press("escape")
+        await pilot.pause()
+        app.last_input -= app.idle_after + 1
+        app.refocus_when_idle()
+        await pilot.pause()
+        assert isinstance(app.focused, tui.Button) and str(app.focused.label) == "b Inbox"
+        assert app.selected()["name"] == "beta"
 
     drive_app(app, steps)

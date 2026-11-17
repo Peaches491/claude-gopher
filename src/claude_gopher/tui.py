@@ -5,22 +5,25 @@ import os
 import shlex
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
 from rich.style import Style
 from rich.text import Text
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
-from textual.widgets import Button, Footer, Input, ListItem, ListView, Markdown, Rule, Static
+from textual.widgets import Button, Footer, Input, ListItem, ListView, Markdown, OptionList, Rule, Static
+from textual.widgets.option_list import Option
 
 from claude_gopher.config import (
-    DEFAULT_SEEN_DWELL_SECONDS, DEFAULT_SUMMARY_LINES, PROACTIVITY_LEVELS, Config, ConfigError, CustomAction, gopher_proactivity, load_config,
-    seen_dwell_seconds, set_gopher_setting, sidebar_summary_lines, tui_actions,
+    DEFAULT_IDLE_SECONDS, DEFAULT_SEEN_DWELL_SECONDS, DEFAULT_SUMMARY_LINES, PROACTIVITY_LEVELS, Config, ConfigError, CustomAction, gopher_proactivity, load_config,
+    idle_seconds, seen_dwell_seconds, set_gopher_setting, sidebar_summary_lines, tui_actions,
 )
-from claude_gopher import popup, restore
+from claude_gopher import devreload, lifecycle, popup, restore
 from claude_gopher.checkouts import read_checkouts
 from claude_gopher.inbox import add_item, mark_read, unread
 from claude_gopher.launch import write_prompt
@@ -36,13 +39,11 @@ from claude_gopher.workon import status_editor_command
 
 REFRESH_SECONDS = 5
 RELOAD_CHECK_SECONDS = 2
-RELOAD_SETTLE_SECONDS = 1.5
 RELOAD_ENV = "GOPHER_TUI_RELOADS"
-PACKAGE_DIR = Path(__file__).resolve().parent
 DETAIL_TIMEOUT = 90
 SUMMARY_MODEL = "haiku"
 SUMMARY_TIMEOUT = 120
-PINNED_ACTIONS = ("custom", "toggle_inbox", "note", "refresh_status", "edit_human", "quit_tab")
+PINNED_ACTIONS = ("custom", "toggle_inbox", "note", "refresh_status", "edit_human", "quit_tab", "lifecycle", "more")
 REFRESH_STATUS_PROMPT = "Please refresh STATUS.md (frontmatter and body) so it reflects where this project stands now."
 STATE_ORDER = {WAITING: 0, CREDS: 0, DONE: 0, WORKING: 1, BACKGROUND: 1, IDLE: 2}
 STATE_STYLE = {
@@ -335,6 +336,28 @@ def status_body(project_dir: Path) -> str:
     return read_frontmatter(path.read_text())[1].strip()
 
 
+def home_relative(path: str) -> str:
+    home = str(Path.home())
+    return "~" + path[len(home):] if path == home or path.startswith(home + "/") else path
+
+
+def checkouts_text(project: dict) -> Text:
+    text = Text()
+    checkouts = project.get("checkouts") or []
+    if not checkouts:
+        return text
+    cwds = [s.get("cwd") or "" for s in project["sessions"]]
+    text.append("\ncheckouts", style="bold")
+    for checkout in checkouts:
+        text.append("\n  ")
+        here = any(cwd == checkout or cwd.startswith(checkout.rstrip("/") + "/") for cwd in cwds)
+        text.append("\u25b8 " if here else "  ", style="green")
+        text.append(home_relative(checkout), style="" if Path(checkout).is_dir() else "dim strike")
+        if not Path(checkout).is_dir():
+            text.append("  missing", style="red")
+    return text
+
+
 def pinned_parts(project: dict, cached: str | None) -> dict[str, Text]:
     body = Text(project["summary"] or "(no summary)")
     if cached:
@@ -343,6 +366,7 @@ def pinned_parts(project: dict, cached: str | None) -> dict[str, Text]:
         body.append("\n")
         body.append_text(state_text(effective_state(session) or "?"))
         body.append(f"  {session.get('name') or '?'}", style="dim")
+    body.append_text(checkouts_text(project))
     return {
         "name": title_text(project),
         "pstate": project_state_text(project),
@@ -454,11 +478,68 @@ class ProjectList(ListView):
     BINDINGS = [Binding("up", "app.move(-1)", "Up", show=False)]
 
 
-class HeaderButtons(Horizontal):
+BUTTON_HINTS = {
+    "toggle_inbox": "Read this project's unread inbox; enter hands an item to the agent beside you",
+    "note": "Write a new inbox item for this project's agent (it waits until you say)",
+    "refresh_status": "Ask the agent beside you to refresh STATUS.md now",
+    "edit_human": "Edit your own notes, human/STATUS.md, in a popup",
+    "quit_tab": "Save this window's layout and agent, then close it (o reopens it)",
+    "lifecycle('archive')": "Park this project: move it to archived/, keep checkouts, run archive cleanup",
+    "lifecycle('close')": "End this project: cleanup, remove its git worktrees, move it to closed/",
+    "more": "More: close this tab, archive the project, or close the project",
+}
+MORE_ACTIONS = (("Q", "Close tab", "quit_tab"), ("A", "Archive", "lifecycle('archive')"), ("X", "Close project", "lifecycle('close')"))
+
+
+class MoreScreen(ModalScreen[str | None]):
+    BINDINGS = [Binding("escape,q,h", "cancel", "Cancel"), Binding("j", "cursor(1)", show=False), Binding("k", "cursor(-1)", show=False)]
+
+    def compose(self) -> ComposeResult:
+        options = []
+        for key, label, action in MORE_ACTIONS:
+            prompt = Text(f"{key} {label}", style="bold")
+            prompt.append(f"\n  {BUTTON_HINTS[action]}", style="dim")
+            options.append(Option(prompt, id=action))
+        with Vertical(id="more-box"):
+            yield Static(Text("More actions (enter runs, escape closes)", style="bold"))
+            yield OptionList(*options, id="more-list")
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(event.option.id)
+
+    def on_key(self, event) -> None:
+        for key, _, action in MORE_ACTIONS:
+            if event.character == key:
+                event.stop()
+                self.dismiss(action)
+
+    def action_cursor(self, step: int) -> None:
+        options = self.query_one(OptionList)
+        options.action_cursor_down() if step > 0 else options.action_cursor_up()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+def header_buttons(specs) -> list[Button]:
+    buttons = []
+    for label, action in specs:
+        button = Button(label, action=f"app.{action}", compact=True)
+        button.hint = BUTTON_HINTS[action]
+        buttons.append(button)
+    return buttons
+
+
+def custom_hint(custom: CustomAction) -> str:
+    return custom.description or f"Run `{custom.command}` in a popup"
+
+
+class HeaderButtons(Vertical):
     BINDINGS = [
         Binding("h,left", "cycle(-1)", "Prev", show=False),
         Binding("l,right", "cycle(1)", "Next", show=False),
-        Binding("j,k,up,down", "projects", "Projects", show=False),
+        Binding("j,down", "projects", "Projects", show=False),
+        Binding("k,up", "stay", "Stay", show=False),
     ]
 
     def action_cycle(self, step: int) -> None:
@@ -470,6 +551,9 @@ class HeaderButtons(Horizontal):
 
     def action_projects(self) -> None:
         self.app.query_one("#projects", ListView).focus()
+
+    def action_stay(self) -> None:
+        pass
 
 
 class PinnedHeader(Vertical):
@@ -486,14 +570,27 @@ class PinnedHeader(Vertical):
             yield Static(classes="agents")
         yield Static(id="pinned-text", classes="body")
         with HeaderButtons(id="pinned-buttons"):
-            for index, custom in enumerate(self.actions):
-                yield Button(f"{custom.key} {custom.label}", action=f"app.custom({index})", compact=True, id=f"custom-{index}")
-            yield Button("b Inbox", action="app.toggle_inbox", compact=True)
-            yield Button("n Note", action="app.note", compact=True)
-            yield Button("u Refresh", action="app.refresh_status", compact=True)
-            yield Button("e Human", action="app.edit_human", compact=True)
-            yield Button("Q Close tab", action="app.quit_tab", compact=True)
+            with Horizontal(classes="button-row"):
+                for index, custom in enumerate(self.actions):
+                    button = Button(f"{custom.key} {custom.label}", action=f"app.custom({index})", compact=True, id=f"custom-{index}")
+                    button.hint = custom_hint(custom)
+                    yield button
+                yield from header_buttons((("b Inbox", "toggle_inbox"), ("n Note", "note"), ("u Refresh", "refresh_status"), ("e Human", "edit_human")))
+                yield from header_buttons(((". More", "more"),))
+        yield Static(id="button-hint")
         yield InboxList(id="pinned-inbox")
+
+    def on_descendant_focus(self, event) -> None:
+        hint = self.query_one("#button-hint", Static)
+        if isinstance(event.widget, Button):
+            hint.update(Text(getattr(event.widget, "hint", ""), style="dim italic"))
+            hint.add_class("open")
+        else:
+            hint.remove_class("open")
+
+    def on_descendant_blur(self, event) -> None:
+        if not isinstance(self.screen.focused, Button) or self.screen.focused not in self.query(Button):
+            self.query_one("#button-hint", Static).remove_class("open")
 
 
 class DetailScreen(Screen):
@@ -587,17 +684,24 @@ class MessageScreen(ModalScreen[str | None]):
 
 
 class ConfirmScreen(ModalScreen[bool]):
-    BINDINGS = [Binding("y", "answer(True)", "Yes"), Binding("n,escape", "answer(False)", "No")]
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
     def __init__(self, question: str):
         super().__init__()
         self.question = question
 
     def compose(self) -> ComposeResult:
-        yield Static(f"{self.question} (y/n)")
+        with Vertical(id="confirm-box"):
+            yield Static(self.question)
+            yield Static(Text("Type yes and press enter to confirm; anything else cancels.", style="dim"))
+            yield Input(placeholder="yes", id="confirm-input")
 
-    def action_answer(self, yes: bool) -> None:
-        self.dismiss(yes)
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        self.dismiss(event.value.strip() == "yes")
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
 
 
 class GopherTUI(App):
@@ -629,13 +733,21 @@ class GopherTUI(App):
     PinnedHeader .facts { width: 1fr; padding-left: 2; }
     PinnedHeader .agents { width: auto; padding-left: 1; }
     PinnedHeader .body { height: auto; padding-left: 2; }
-    #pinned-buttons { height: 1; margin: 1 0 0 0; }
-    #pinned-buttons Button { margin-right: 1; }
+    #pinned-buttons { height: auto; margin: 1 0 0 0; }
+    #pinned-buttons .button-row { height: 1; }
+    #pinned-buttons Button { margin-right: 2; min-width: 0; width: auto; }
+    #button-hint { display: none; height: auto; padding-left: 1; }
+    #button-hint.open { display: block; }
     #pinned-inbox { height: auto; max-height: 10; display: none; }
     #pinned-inbox.open { display: block; }
     DetailScreen VerticalScroll { padding: 0 1; }
     MessageScreen, TextScreen, ConfirmScreen { align: center middle; }
-    ConfirmScreen > Static { width: 90%; height: auto; border: round ansi_yellow; padding: 0 1; }
+    MoreScreen { align: center middle; }
+    #more-box { width: 90%; height: auto; border: round ansi_bright_black; padding: 0 1; }
+    #more-list { height: auto; border: none; }
+    #confirm-box { width: 90%; height: auto; max-height: 90%; border: round ansi_yellow; padding: 0 1; }
+    #confirm-box > Static { height: auto; }
+    #confirm-input { border: none; height: 1; }
     MessageScreen > Static, MessageScreen > Input { width: 90%; }
     TextScreen > VerticalScroll { width: 90%; height: 80%; border: round ansi_bright_black; padding: 0 1; }
     """
@@ -665,7 +777,10 @@ class GopherTUI(App):
         Binding("P", "proactivity", "Proactivity", show=False),
         Binding("ctrl+r", "refresh", "Refresh", show=False),
         Binding("q", "quit", "Quit"),
+        Binding("full_stop", "more", "More", show=False),
         Binding("Q", "quit_tab", "Close tab", show=False),
+        Binding("A", "lifecycle('archive')", "Archive", show=False),
+        Binding("X", "lifecycle('close')", "Close project", show=False),
     ]
 
     def __init__(self, config: Config, pinned: str | None = None):
@@ -682,7 +797,15 @@ class GopherTUI(App):
         self.applicable: set[int] = set()
         self.search = ""
         self.ordered: list[dict] = []
-        self.stamp = source_stamp()
+        self.token = devreload.code_token()
+        self.pending_reload: dict | None = None
+        self.reload_stop: threading.Event | None = None
+        self.last_input = time.time()
+        try:
+            self.idle_after = idle_seconds(config)
+        except ConfigError as error:
+            self.action_problems.append(str(error))
+            self.idle_after = DEFAULT_IDLE_SECONDS
         self.reloading = False
         self.action_problems: list[str] = []
         try:
@@ -725,24 +848,50 @@ class GopherTUI(App):
         for problem in self.action_problems:
             self.notify(problem, severity="warning")
         self.action_refresh()
-        self.set_interval(RELOAD_CHECK_SECONDS, self.check_reload)
+        self.set_interval(REFRESH_SECONDS, self.action_refresh)
+        self.set_interval(RELOAD_CHECK_SECONDS, self.refocus_when_idle)
+        self.start_dev_reload()
 
-    def check_reload(self) -> None:
-        stamp = source_stamp()
-        if stamp <= self.stamp or time.time() - stamp < RELOAD_SETTLE_SECONDS:
-            return
-        if len(self.screen_stack) > 1 or self.focused is self.search_box():
-            return
-        self.stamp = stamp
-        self.run_worker(self.try_reload, thread=True, exclusive=True, group="reload")
+    async def on_event(self, event: events.Event) -> None:
+        if isinstance(event, (events.Key, events.MouseDown, events.MouseScrollDown, events.MouseScrollUp)):
+            self.last_input = time.time()
+        await super().on_event(event)
 
-    def try_reload(self) -> None:
-        if not new_code_imports():
-            self.call_from_thread(self.notify, "gopher code changed but does not import; still on the old version", severity="warning")
+    def refocus_when_idle(self) -> None:
+        if not self.pinned or not self.idle_after or time.time() - self.last_input < self.idle_after:
+            return
+        if len(self.screen_stack) > 1 or isinstance(self.focused, Input) or self.query("#pinned-inbox.open"):
+            return
+        view = self.project_list()
+        first = self.first_card_index()
+        if isinstance(self.focused, Button) and view.index == first and view.scroll_y == 0:
+            return
+        view.index = first
+        view.scroll_home(animate=False)
+        self.focus_header()
+
+    def start_dev_reload(self) -> None:
+        if not devreload.enabled(self.config):
+            return
+        if not devreload.watcher_available():
+            self.notify("[dev] reload is on but watchfiles is missing; install the dev extra", severity="warning")
+            return
+        self.reload_stop = threading.Event()
+        self.run_worker(lambda: devreload.watch(self.config, self.reload_signalled, self.reload_stop), thread=True, group="dev-reload")
+        self.set_interval(RELOAD_CHECK_SECONDS, self.reload_if_pending)
+
+    def reload_signalled(self, signal: dict) -> None:
+        token = signal.get("token")
+        if token and token != self.token:
+            self.pending_reload = signal
+
+    def reload_if_pending(self) -> None:
+        if not self.pending_reload or len(self.screen_stack) > 1 or isinstance(self.focused, Input):
             return
         self.reloading = True
-        self.call_from_thread(self.exit)
-        self.set_interval(REFRESH_SECONDS, self.action_refresh)
+        if self.reload_stop:
+            self.reload_stop.set()
+        self.exit()
 
     def check_action(self, action: str, parameters: tuple) -> bool | None:
         if action == "clear_search":
@@ -912,13 +1061,18 @@ class GopherTUI(App):
             return
         pane = jump_target(project["sessions"])
         if pane:
-            popup.jump_to(pane)
+            self.jump_to(pane)
             return
         windows = [w for w, name in project_window_ids(project["name"])]
         if windows:
-            popup.jump_to(windows[0])
+            self.jump_to(windows[0])
         else:
             self.notify(f"{project['name']} has no open window; o opens it", severity="warning")
+
+    def jump_to(self, target: str) -> None:
+        popup.jump_to(target)
+        if self.search or self.query("#search.open"):
+            self.call_later(self.action_clear_search)
 
     def own_session(self) -> str | None:
         if not self.own_pane:
@@ -931,7 +1085,7 @@ class GopherTUI(App):
             return
         windows = [w for w, _ in project_window_ids(project["name"])]
         if windows:
-            popup.jump_to(windows[0])
+            self.jump_to(windows[0])
             return
         self.notify(f"Opening {project['name']}...")
         self.run_worker(lambda: self.open_window(project["name"]), thread=True, group="window")
@@ -944,7 +1098,7 @@ class GopherTUI(App):
             return
         source = "fresh layout" if snapshot.source == "fresh" else "restored"
         self.call_from_thread(self.notify, f"{name}: window opened ({source})")
-        self.call_from_thread(popup.jump_to, window)
+        self.call_from_thread(self.jump_to, window)
 
     def action_close_window(self) -> None:
         project = self.target_project()
@@ -961,6 +1115,54 @@ class GopherTUI(App):
                 self.run_worker(lambda: self.close_window(name), thread=True, group="window")
 
         self.push_screen(ConfirmScreen(f"Close {name}'s window? Its layout and agent session are saved for o to restore."), answered)
+
+    def action_more(self) -> None:
+        if not self.pinned_project():
+            return
+
+        def chosen(action: str | None) -> None:
+            if action:
+                self.call_later(self.run_action, action)
+
+        self.push_screen(MoreScreen(), chosen)
+
+    def action_lifecycle(self, action: str) -> None:
+        project = self.pinned_project()
+        if not project:
+            return
+        self.notify(f"Planning {action} of {project['name']}...")
+        self.run_worker(lambda: self.plan_lifecycle(action, project["name"]), thread=True, group="lifecycle")
+
+    def plan_lifecycle(self, action: str, name: str) -> None:
+        try:
+            plan = lifecycle.make_plan(self.config, action, name)
+        except lifecycle.LifecycleError as error:
+            self.call_from_thread(self.notify, f"{action} {name}: {error}", severity="error")
+            return
+        self.call_from_thread(self.confirm_lifecycle, plan)
+
+    def confirm_lifecycle(self, plan: lifecycle.Plan) -> None:
+        if plan.blockers:
+            self.push_screen(TextScreen(lifecycle.describe(plan)))
+            return
+
+        def answered(yes: bool | None) -> None:
+            if yes:
+                self.notify(f"{plan.action.capitalize()} {plan.project}: running...")
+                self.run_worker(lambda: self.run_lifecycle(plan), thread=True, group="lifecycle")
+            else:
+                self.notify("Nothing changed")
+
+        self.push_screen(ConfirmScreen(lifecycle.describe(plan)), answered)
+
+    def run_lifecycle(self, plan: lifecycle.Plan) -> None:
+        try:
+            report = lifecycle.execute(self.config, plan)
+        except (lifecycle.LifecycleError, OSError) as error:
+            self.call_from_thread(self.notify, f"{plan.action} {plan.project}: {error}", severity="error")
+            return
+        self.call_from_thread(self.notify, f"{plan.project}: " + "; ".join(report))
+        self.call_from_thread(self.action_refresh)
 
     def action_quit_tab(self) -> None:
         project = self.pinned_project()
@@ -1142,15 +1344,6 @@ def detect_pinned(config: Config) -> str | None:
         return None
     projects = {p["name"]: p for p in project_overview(config)}
     return pane_project(config, pane, projects)
-
-
-def source_stamp(package_dir: Path = PACKAGE_DIR) -> float:
-    return max((path.stat().st_mtime for path in package_dir.rglob("*.py")), default=0.0)
-
-
-def new_code_imports() -> bool:
-    result = subprocess.run([sys.executable, "-c", "import claude_gopher.cli, claude_gopher.tui"], capture_output=True, text=True)
-    return result.returncode == 0
 
 
 def run(config: Config, project: str | None = None) -> None:

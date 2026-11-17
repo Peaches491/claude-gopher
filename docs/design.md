@@ -452,11 +452,14 @@ wake: false
   Other projects follow as compact blocks: name and status, links and agents, then the summary
   (or Haiku line) cut to `[tui] summary_lines` rows (default 2; 0 hides it). Without a pinned project it is the full
   dashboard.
-- Live reload: every 2 s the TUI compares the newest mtime under the installed package; once a
-  change has settled, it checks the new code imports (in a subprocess), then exits and re-execs
-  itself with the same arguments, so every open sidebar picks up a new version. It waits while a
-  modal or the search box is open, and stays on the old code (with a warning) if the new code
-  fails to import.
+- Developer reload (opt-in, `[dev] reload = true`, needs the `dev` extra for watchfiles): each
+  sidebar watches `<state_dir>/tui/reload.json` with inotify. `gopher dev reload` smoke-starts the
+  TUI headless and, if it starts, writes a token (hash of the package's code) plus the git SHA
+  there; sidebars whose own token differs restart themselves (re-exec, same arguments) once no
+  modal or input is open. Off by default; regular installs never watch or reload.
+- Idle reset: after `[tui] idle_seconds` (default 60; 0 off) without input, a pinned sidebar moves
+  its highlight back to the first project and focus to the header, unless a modal, an input, or
+  the inbox list is open.
 - Saving the root: Gopher owns the root repository's history. `gopher save` groups `git status`
   paths by project directory (projects/, archived/, closed/), commits each group with a message
   naming the areas touched, commits the rest as `root: ...`, and pushes. Gopher schedules it every
@@ -497,7 +500,7 @@ wake: false
   a tmux startup / post-restore hook.
 - Ships as `examples/tmux.conf` to source from the user's tmux config.
 
-### 7. Lifecycle commands (`gopher archive|close|reopen <project>`)
+### 7. Lifecycle commands (`gopher archive|close|reopen <project>`) **(done)**
 
 Scripts, not agents, do the destructive parts; agents/Gopher only propose them.
 - **archive**: move to `<archived_dir>/<project>/`; for each linked checkout run the site's
@@ -509,6 +512,12 @@ Scripts, not agents, do the destructive parts; agents/Gopher only propose them.
   - print the full plan (worktrees, branches, output bases) and require an explicit `yes`
   - offer to update each ticket in `resources/tickets/` (transition/comment), via the agent, as the
     `close` prompt describes
+  - as built: worktrees only (plain clones are kept), `git worktree remove` without force, then
+    `git branch -d`, then the site's `on_remove` commands (run in the main checkout with
+    `GOPHER_CHECKOUT` set); blockers are uncommitted changes and commits on no remote branch (open
+    PRs are left to the agent's pre-close check); an open window is snapshotted and closed first.
+    Agents run the plan, show it, and pass `--yes` only after the user agrees; at a terminal the
+    user types `yes`.
 - **reopen**: move the project dir back to `<projects_dir>` (checkouts are not recreated).
 
 ## Build order
@@ -523,7 +532,7 @@ Scripts, not agents, do the destructive parts; agents/Gopher only propose them.
 4. Gopher prompt + `gopher launch` + popup binding. **(built; session and popup run live, window 0
    link not yet confirmed by the user)**
 5. TUI. **(first pass)** `gopher tui`, run in the left pane by `gopher launch`.
-6. `gopher archive|close|reopen`.
+6. `gopher archive|close|reopen`. **(done)**
 7. `gopher workon` (agent, term, source, where, link, unlink), absorbing `workon.py` /
    `runagent` from `~/ai_setup`. **(done)** Then migrate `~/ai_setup` data into `~/workon`.
    Shell completion for the rest of `gopher` is a to-do.

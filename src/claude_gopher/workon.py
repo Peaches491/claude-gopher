@@ -134,18 +134,14 @@ class TtyUI:
                 return options[keys.index(key)]
 
     def confirm(self, prompt: str) -> bool:
-        print(f"{prompt} [Y/n]: ", end="", file=sys.stderr, flush=True)
-        while True:
-            key = self.key()
-            if key in ("y", "Y", "\n", "\r"):
-                self.say("y")
-                return True
-            if key in ("n", "N") or key in ABORT_KEYS:
-                self.say("n")
-                return False
+        return self.read(f"{prompt} Type yes to confirm") == "yes"
 
     def read(self, prompt: str) -> str:
-        with open("/dev/tty") as tty_in:
+        try:
+            tty_file = open("/dev/tty")
+        except OSError as error:
+            raise WorkonError("an answer is needed but there is no terminal") from error
+        with tty_file as tty_in:
             print(f"{prompt}: ", end="", file=sys.stderr, flush=True)
             return tty_in.readline().strip()
 

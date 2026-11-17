@@ -72,7 +72,7 @@ snapshot) or jump to it, `c` close its window (after a y/n), `+`/`-` raise or lo
 `i` message its agent (both in a popup that closes when you send), `m`/`M` file an inbox item, `x`
 mark finished work seen, `r` one-line Haiku summary, `P` cycle Gopher's proactivity, `q` quit.
 `k` at the top of the list moves into the header buttons; there `h`/`l` move between them and
-`j`/`k` return to the list. For the pinned project: `b` inbox, `n` new inbox item, `u` refresh STATUS, `e` edit
+`j` returns to the list (`k` stays put); a focused button shows a one-line hint below the row. For the pinned project: `b` inbox, `n` new inbox item, `u` refresh STATUS, `e` edit
 `human/STATUS.md`, `Q` close this tab (after a y/n; `o` restores it), plus any custom actions from the root `config.toml`. Each one is a header
 button and a hotkey that runs a shell command for the pinned project in a tmux popup:
 
@@ -83,15 +83,32 @@ label = "Status"
 command = "git status --short"
 cwd = "checkout"   # "checkout" (the project's first checkout, default) or "project"
 match = "~/src/*"   # optional: only for projects with a checkout matching this glob
+description = "Show uncommitted changes"   # optional: shown when the button is focused
 ```
 
 Other projects' blocks show the summary cut to `[tui] summary_lines` rows (default 2; 0 hides it).
+After `[tui] idle_seconds` (default 60) without input, a sidebar returns to its header and the
+top of the list. For gopher development, `[dev] reload = true` (with `uv tool install -e
+'.[dev]'`) makes sidebars restart when you run `gopher dev reload`, which first checks the TUI
+starts.
 An agent's "done" counts as seen once its pane has had focus for `[tui] seen_dwell_seconds`
 (default 5).
 
 With `match`, the button shows only when the project has a matching checkout, and the command
 runs in the first one that matches. The command gets `GOPHER_ROOT`, `GOPHER_PROJECT`, and `GOPHER_PROJECT_DIR` in its environment. A
 key that clashes with a built-in key is skipped with a warning.
+
+## Archive, close, reopen
+
+`gopher archive|close|reopen <project>` print the plan, then ask you to type `yes` (agents pass
+`--yes` only after you approve the plan; `--dry-run` only prints it). Archive moves the project to
+`archived/` and runs `[lifecycle] on_archive` in its checkouts. Close runs `on_close`, removes the
+project's git worktrees (`git worktree remove`, no force; then `git branch -d`), runs `on_remove`,
+and moves it to `closed/`; plain clones, `[checkouts] protected` paths, and checkouts another
+project owns are kept. Uncommitted changes or commits on no remote block a close. An open project
+window is snapshotted and closed first. Lifecycle commands get `GOPHER_PROJECT`,
+`GOPHER_CHECKOUT`, and `GOPHER_ROOT`. In the sidebar: `A` archive and `X` close the window's own
+project (header buttons with hints). Every TUI confirmation wants `yes` typed.
 
 ## Saving the root
 

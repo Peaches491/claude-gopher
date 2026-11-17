@@ -139,6 +139,14 @@ def gopher_features(config: Config) -> list[str]:
 
 DEFAULT_SUMMARY_LINES = 2
 DEFAULT_SEEN_DWELL_SECONDS = 5
+DEFAULT_IDLE_SECONDS = 60
+
+
+def idle_seconds(config: Config) -> float:
+    seconds = config.settings.get("tui", {}).get("idle_seconds", DEFAULT_IDLE_SECONDS)
+    if not isinstance(seconds, (int, float)) or isinstance(seconds, bool) or seconds < 0:
+        raise ConfigError(f"[tui] idle_seconds must be a non-negative number (0 turns it off), not {seconds!r}")
+    return seconds
 
 
 def seen_dwell_seconds(config: Config) -> float:
@@ -165,6 +173,7 @@ class CustomAction:
     command: str
     cwd: str = "checkout"
     match: str | None = None
+    description: str = ""
 
 
 def tui_actions(config: Config) -> list[CustomAction]:
@@ -181,7 +190,10 @@ def tui_actions(config: Config) -> list[CustomAction]:
         match = entry.get("match")
         if match is not None and not (isinstance(match, str) and match):
             raise ConfigError("[[tui.actions]] match must be a checkout path glob")
-        actions.append(CustomAction(entry["key"], entry["label"], entry["command"], cwd, match))
+        description = entry.get("description", "")
+        if not isinstance(description, str):
+            raise ConfigError("[[tui.actions]] description must be a string")
+        actions.append(CustomAction(entry["key"], entry["label"], entry["command"], cwd, match, description))
     return actions
 
 

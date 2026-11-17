@@ -87,3 +87,10 @@ def test_command_popup_runs_in_checkout_and_restores_dim(monkeypatch):
     assert argv[argv.index("-d") + 1] == "/co"
     assert {"GOPHER_PROJECT=alpha"} == {argv[i + 1] for i, a in enumerate(argv) if a == "-e"}
     assert "git status" in argv[-1] and "set -wu -t @5 window-style" in argv[-1]
+
+
+def test_guarded_restores_even_when_interrupted(tmp_path):
+    marker = tmp_path / "cleaned"
+    script = popup.guarded("kill -INT $$; sleep 5", f"touch {marker}")
+    result = popup.subprocess.run(script, shell=True, capture_output=True, text=True, timeout=10)
+    assert marker.exists() and result.returncode == 130

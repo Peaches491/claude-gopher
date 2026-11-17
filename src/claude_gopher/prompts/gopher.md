@@ -74,6 +74,13 @@ only read it.
   project it applies to.
 - When a project reports that an item's source changed, update the item and its index line.
 
+## Archiving and closing projects
+
+When the user asks to archive, close, or reopen a project, read `gopher prompt archive` (or
+`close`, `reopen`), run `gopher <action> <project>` to get the plan, and show it. Run it again with
+`--yes` only after the user explicitly agrees to that plan. If the plan is blocked, report the
+blockers and route the fixes to the project's agent. Then run `gopher save`.
+
 ## Saving the root
 
 The root is a git repository that backs up the user's projects; keeping it saved is your job,
