@@ -208,6 +208,7 @@ is a full-width dashboard.
 | `r` | one-line Haiku summary |
 | `x` | mark finished work seen |
 | `P` | cycle Gopher's proactivity |
+| `.` | More for the highlighted project: `c` close its window, `A` archive, `X` close |
 | `q` | quit the sidebar |
 
 | Key | For the pinned project (also header buttons) |

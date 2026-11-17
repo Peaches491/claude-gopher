@@ -43,7 +43,7 @@ RELOAD_ENV = "GOPHER_TUI_RELOADS"
 DETAIL_TIMEOUT = 90
 SUMMARY_MODEL = "haiku"
 SUMMARY_TIMEOUT = 120
-PINNED_ACTIONS = ("custom", "toggle_inbox", "note", "refresh_status", "edit_human", "quit_tab", "lifecycle", "more")
+PINNED_ACTIONS = ("custom", "toggle_inbox", "note", "refresh_status", "edit_human", "quit_tab")
 REFRESH_STATUS_PROMPT = "Please refresh STATUS.md (frontmatter and body) so it reflects where this project stands now."
 STATE_ORDER = {WAITING: 0, CREDS: 0, DONE: 0, WORKING: 1, BACKGROUND: 1, IDLE: 2}
 STATE_STYLE = {
@@ -484,31 +484,48 @@ BUTTON_HINTS = {
     "refresh_status": "Ask the agent beside you to refresh STATUS.md now",
     "edit_human": "Edit your own notes, human/STATUS.md, in a popup",
     "quit_tab": "Save this window's layout and agent, then close it (o reopens it)",
-    "lifecycle('archive')": "Park this project: move it to archived/, keep checkouts, run archive cleanup",
-    "lifecycle('close')": "End this project: cleanup, remove its git worktrees, move it to closed/",
     "more": "More: close this tab, archive the project, or close the project",
 }
-MORE_ACTIONS = (("Q", "Close tab", "quit_tab"), ("A", "Archive", "lifecycle('archive')"), ("X", "Close project", "lifecycle('close')"))
+LIFECYCLE_HINTS = {
+    "archive": "Park {name}: move it to archived/, keep checkouts, run archive cleanup",
+    "close": "End {name}: cleanup, remove its git worktrees, move it to closed/",
+}
+
+
+def more_actions(name: str, pinned: bool) -> list[tuple[str, str, str, str]]:
+    if pinned:
+        window = ("Q", "Close tab", "quit_tab", BUTTON_HINTS["quit_tab"])
+    else:
+        window = ("c", "Close window", f"close_window({name!r})", f"Save {name}'s window layout and agent, then close it (o reopens it)")
+    return [
+        window,
+        ("A", "Archive", f"lifecycle('archive', {name!r})", LIFECYCLE_HINTS["archive"].format(name=name)),
+        ("X", "Close project", f"lifecycle('close', {name!r})", LIFECYCLE_HINTS["close"].format(name=name)),
+    ]
 
 
 class MoreScreen(ModalScreen[str | None]):
     BINDINGS = [Binding("escape,q,h", "cancel", "Cancel"), Binding("j", "cursor(1)", show=False), Binding("k", "cursor(-1)", show=False)]
 
+    def __init__(self, name: str, actions: list[tuple[str, str, str, str]]):
+        super().__init__()
+        self.project_name, self.actions = name, actions
+
     def compose(self) -> ComposeResult:
         options = []
-        for key, label, action in MORE_ACTIONS:
+        for key, label, action, hint in self.actions:
             prompt = Text(f"{key} {label}", style="bold")
-            prompt.append(f"\n  {BUTTON_HINTS[action]}", style="dim")
+            prompt.append(f"\n  {hint}", style="dim")
             options.append(Option(prompt, id=action))
         with Vertical(id="more-box"):
-            yield Static(Text("More actions (enter runs, escape closes)", style="bold"))
+            yield Static(Text(f"{self.project_name} (enter runs, escape closes)", style="bold"))
             yield OptionList(*options, id="more-list")
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         self.dismiss(event.option.id)
 
     def on_key(self, event) -> None:
-        for key, _, action in MORE_ACTIONS:
+        for key, _, action, _ in self.actions:
             if event.character == key:
                 event.stop()
                 self.dismiss(action)
@@ -783,8 +800,6 @@ class GopherTUI(App):
         Binding("q", "quit", "Quit"),
         Binding("full_stop", "more", "More", show=False),
         Binding("Q", "quit_tab", "Close tab", show=False),
-        Binding("A", "lifecycle('archive')", "Archive", show=False),
-        Binding("X", "lifecycle('close')", "Close project", show=False),
     ]
 
     def __init__(self, config: Config, pinned: str | None = None):
@@ -1104,8 +1119,8 @@ class GopherTUI(App):
         self.call_from_thread(self.notify, f"{name}: window opened ({source})")
         self.call_from_thread(self.jump_to, window)
 
-    def action_close_window(self) -> None:
-        project = self.target_project()
+    def action_close_window(self, name: str | None = None) -> None:
+        project = self.projects.get(name) if name else self.target_project()
         if not project:
             return
         name = project["name"]
@@ -1121,17 +1136,19 @@ class GopherTUI(App):
         self.push_screen(ConfirmScreen(f"Close {name}'s window? Its layout and agent session are saved for o to restore."), answered)
 
     def action_more(self) -> None:
-        if not self.pinned_project():
+        project = self.target_project()
+        if not project:
             return
+        name = project["name"]
 
         def chosen(action: str | None) -> None:
             if action:
                 self.call_later(self.run_action, action)
 
-        self.push_screen(MoreScreen(), chosen)
+        self.push_screen(MoreScreen(name, more_actions(name, name == self.pinned)), chosen)
 
-    def action_lifecycle(self, action: str) -> None:
-        project = self.pinned_project()
+    def action_lifecycle(self, action: str, name: str | None = None) -> None:
+        project = self.projects.get(name) if name else self.target_project()
         if not project:
             return
         self.notify(f"Planning {action} of {project['name']}...")

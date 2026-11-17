@@ -640,19 +640,53 @@ def test_lifecycle_buttons_plan_confirm_and_run(config, monkeypatch):
         assert isinstance(app.screen, tui.ConfirmScreen) and "Archive alpha" in app.screen.question
         await pilot.press("escape")
         await pilot.pause()
-        await pilot.press("A")
+        await pilot.press("full_stop", "A")
         await app.workers.wait_for_complete()
         await pilot.pause()
         assert isinstance(app.screen, tui.ConfirmScreen) and "Archive alpha" in app.screen.question
         await pilot.press("n", "o", "enter")
         await pilot.pause()
         assert ran == []
-        await pilot.press("A")
+        await pilot.press("full_stop", "A")
         await app.workers.wait_for_complete()
         await pilot.pause()
         await pilot.press("y", "e", "s", "enter")
         await app.workers.wait_for_complete()
         assert ran == ["archive"]
+
+    drive_app(app, steps)
+
+
+def test_more_menu_on_a_list_entry_targets_that_project(config, monkeypatch):
+    rows = [{**project(name), "path": str(config.projects_dir / name)} for name in ("alpha", "beta")]
+    monkeypatch.setattr(tui, "project_overview", lambda config: rows)
+    stub_tmux(monkeypatch)
+    planned = []
+
+    def make_plan(config, action, name):
+        planned.append((action, name))
+        return tui.lifecycle.Plan(action, name, config.projects_dir / name, config.closed_dir / name, None, [])
+
+    monkeypatch.setattr(tui.lifecycle, "make_plan", make_plan)
+    app = tui.GopherTUI(config, pinned="alpha")
+
+    async def steps(app, pilot):
+        app.project_list().focus()
+        await pilot.pause()
+        assert app.selected()["name"] == "beta"
+        await pilot.press("A")
+        await pilot.pause()
+        assert planned == [] and not isinstance(app.screen, tui.ConfirmScreen)
+        await pilot.press("full_stop")
+        await pilot.pause()
+        assert isinstance(app.screen, tui.MoreScreen) and app.screen.project_name == "beta"
+        assert [label for _, label, _, _ in app.screen.actions] == ["Close window", "Archive", "Close project"]
+        app.project_list().index = None
+        await pilot.press("X")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert planned == [("close", "beta")]
+        assert isinstance(app.screen, tui.ConfirmScreen) and "Close beta" in app.screen.question
 
     drive_app(app, steps)
 
