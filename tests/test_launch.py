@@ -57,7 +57,7 @@ class FakeTmux:
             self.sessions["gopher"] = [("1", "@9", "gopher")]
             stdout = "%1"
         elif command == "list-panes":
-            stdout = "%1"
+            stdout = "%0\tpython3\n%1\tclaude"
         elif command == "split-window":
             stdout = "%2"
         elif command == "link-window":

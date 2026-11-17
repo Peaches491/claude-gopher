@@ -87,7 +87,7 @@ Developed on Linux; macOS is untested. gopher has had one user so far, so expect
 
 ```bash
 # 1. Install
-uv tool install git+https://github.com/Peaches491/claude-gopher@v0.1.0
+uv tool install git+https://github.com/Peaches491/claude-gopher@v0.1.1
 
 # 2. Create a root, install the Claude Code hooks, and let Claude interview you about your setup
 gopher setup                    # asks where the root goes (default ~/workon)

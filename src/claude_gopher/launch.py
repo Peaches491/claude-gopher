@@ -4,7 +4,7 @@ import subprocess
 
 from claude_gopher.config import Config, gopher_features
 from claude_gopher.prompt import SESSION_CONTEXTS, assemble
-from claude_gopher.workon import Agent, WorkonError, agent_argv, pick_agent, run_lines
+from claude_gopher.workon import SIDEBAR_COMMANDS, Agent, WorkonError, agent_argv, pick_agent, run_lines
 
 SESSION = "gopher"
 WINDOW = "gopher"
@@ -108,11 +108,16 @@ def create_session(config: Config) -> str:
     return gopher_window()
 
 
+def agent_pane(window: str) -> str:
+    panes = [line.split("\t") for line in out("list-panes", "-t", window, "-F", "#{pane_id}\t#{pane_current_command}").splitlines()]
+    return next((pane for pane, command in panes if command not in SIDEBAR_COMMANDS), panes[0][0])
+
+
 def restart(config: Config, resume: bool) -> list[str]:
     if not has_session(SESSION):
         return launch(config, None)
     ensure_agent_dir(config)
-    pane = out("list-panes", "-t", gopher_window(), "-F", "#{pane_id}").splitlines()[0]
+    pane = agent_pane(gopher_window())
     tmux("respawn-pane", "-k", "-t", pane, "-c", str(config.agent_dir))
     tmux("send-keys", "-t", pane, agent_command(config, resume), "Enter")
     return [f"restarted Gopher in {pane}" + (" (continuing its last conversation)" if resume else " (fresh session)")]
