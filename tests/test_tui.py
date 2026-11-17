@@ -728,3 +728,9 @@ def test_idle_returns_focus_to_header(config, monkeypatch):
         assert app.selected()["name"] == "beta"
 
     drive_app(app, steps)
+
+
+def test_projects_without_an_open_window_get_a_gray_bar():
+    rows = tui.mark_open_windows([project("alpha"), project("beta")], {"alpha", "gopher"})
+    assert [tui.state_class(row) for row in rows] == ["pstate-active", "pstate-other"]
+    assert tui.state_class(tui.mark_open_windows([project("beta")], None)[0]) == "pstate-active"

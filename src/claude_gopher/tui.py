@@ -285,6 +285,8 @@ def project_state_text(project: dict) -> Text:
 
 def state_class(project: dict) -> str:
     state = project.get("state") or ""
+    if project.get("window_open") is False:
+        return "pstate-other"
     return f"pstate-{state}" if state in PROJECT_STATE_COLOUR else "pstate-other"
 
 
@@ -938,13 +940,13 @@ class GopherTUI(App):
         self.run_worker(self.load, thread=True, exclusive=True, group="refresh")
 
     def load(self) -> None:
-        projects = project_overview(self.config)
+        projects = mark_open_windows(project_overview(self.config), open_window_names())
         now = time.time()
         focus_since = self.focus.observe(focused_panes(), now)
         seen = self.focus.seen([s for p in projects for s in p["sessions"]], focus_since, now)
         if seen:
             self.acks.ack(seen, now)
-            projects = project_overview(self.config)
+            projects = mark_open_windows(project_overview(self.config), open_window_names())
         self.call_from_thread(self.show, projects)
 
     async def show(self, projects: list[dict]) -> None:
@@ -979,7 +981,7 @@ class GopherTUI(App):
             self.query_one("#pinned-text", Static).update(Text(f"{self.pinned}: no such project", style="red"))
             return
         header = self.query_one(PinnedHeader)
-        header.remove_class(*STATE_CLASSES).add_class(state_class(project))
+        header.remove_class(*STATE_CLASSES).add_class(state_class({**project, "window_open": None}))
         for name, text in pinned_parts(project, self.cache.get(project)).items():
             header.query_one(f".{name}", Static).update(text)
         self.applicable = {index for index, custom in enumerate(self.actions) if action_applies(project, custom)}
@@ -1345,6 +1347,19 @@ class GopherTUI(App):
             return
         self.cache.put(project["name"], summary)
         self.call_from_thread(self.action_refresh)
+
+
+def open_window_names() -> set[str] | None:
+    listing = tmux("list-windows", "-a", "-F", "#{window_name}")
+    if listing.returncode != 0:
+        return None
+    return {LEADING_GLYPHS.sub("", name) for name in listing.stdout.splitlines()}
+
+
+def mark_open_windows(projects: list[dict], names: set[str] | None) -> list[dict]:
+    for project in projects:
+        project["window_open"] = None if names is None else project["name"] in names
+    return projects
 
 
 def project_window_ids(project: str) -> list[tuple[str, str]]:

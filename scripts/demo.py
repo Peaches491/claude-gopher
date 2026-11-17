@@ -148,6 +148,7 @@ def build_root(home: Path):
 def patch_live_sources(sessions: list[dict]) -> None:
     overview.current_sessions = lambda config, prune=True: [dict(s) for s in sessions]
     tui.focused_panes = lambda: {}
+    tui.open_window_names = lambda: {s["project"] for s in sessions}
 
 
 def clean_svg(svg: str) -> str:

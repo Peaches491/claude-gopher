@@ -16,6 +16,11 @@ GOPHER_KICKOFF = (
     "Start of session: read every project's STATUS.md frontmatter and human/STATUS.md, and today's journal, "
     "then give me a short briefing and ask what I'd like to do."
 )
+GOPHER_RESTART_KICKOFF = (
+    "You were just restarted (for example after a gopher update), continuing this conversation. Session-only "
+    "scheduled jobs did not survive: recreate the ones your instructions ask for at the start of a session, and any "
+    "monitors still listed as running in today's journal, then tell me in one line what you rescheduled."
+)
 AGENT_STATUS = """---
 summary: Gopher agent directory.
 state: active
@@ -70,8 +75,12 @@ def ensure_agent_dir(config: Config) -> None:
         status.write_text(AGENT_STATUS.format(date=datetime.date.today().isoformat()))
 
 
-def agent_lines(config: Config, passthrough: list[str]) -> list[str]:
-    argv = agent_argv(gopher_agent(config), passthrough, GOPHER_KICKOFF)
+def agent_lines(config: Config, passthrough: list[str], resume: bool = False) -> list[str]:
+    agent = gopher_agent(config)
+    if resume and agent.name == "claude":
+        argv = [*agent.command, "--continue", *passthrough, GOPHER_RESTART_KICKOFF]
+    else:
+        argv = agent_argv(agent, passthrough, GOPHER_KICKOFF)
     return [
         f"cd {shlex.quote(str(config.agent_dir))}",
         f"export GOPHER_HOME={shlex.quote(str(config.root))} GOPHER_AGENT=gopher"
@@ -84,9 +93,7 @@ def agent_lines(config: Config, passthrough: list[str]) -> list[str]:
 def exec_agent(config: Config, passthrough: list[str], resume: bool = False) -> None:
     ensure_agent_dir(config)
     write_prompt(config)
-    if resume and gopher_agent(config).name == "claude":
-        passthrough = ["--continue", *passthrough]
-    run_lines(agent_lines(config, passthrough))
+    run_lines(agent_lines(config, passthrough, resume))
 
 
 def agent_command(config: Config, resume: bool = False) -> str:

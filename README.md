@@ -65,7 +65,8 @@ worktree belongs to what. gopher is built around a few ideas:
   <img src="docs/images/dashboard.png" alt="gopher tui as a full-width dashboard" width="520">
 </p>
 
-*Above: made-up projects in every state. Green is active, yellow waiting on review, red blocked.
+*Above: made-up projects in every state. Green is active, yellow waiting on review, red blocked,
+gray no open tmux window.
 On the right of each block: needs input, done (finished, not yet seen), needs login, working,
 idle.*
 

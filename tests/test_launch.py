@@ -187,3 +187,9 @@ def test_restart_without_a_session_launches(config, monkeypatch):
     fake = FakeTmux({"main": []})
     monkeypatch.setattr(launch, "tmux", fake)
     assert launch.restart(config, resume=False)[0] == "started gopher session (@9)"
+
+
+def test_resumed_gopher_is_told_to_reschedule(config):
+    line = launch.agent_lines(config, [], resume=True)[-1]
+    assert "--continue" in line and "just restarted" in line and "Start of session" not in line
+    assert "Start of session" in launch.agent_lines(config, [])[-1]
