@@ -59,8 +59,9 @@ there on the user's behalf.
 
 Git checkouts live outside the root and are never written to by the project system: no project
 files, links, or markers go into a checkout. Ownership is recorded only in each project's
-`checkouts.toml`. Use `gopher checkout list|add|remove|move` to inspect or change it, and do not
-list checkouts in `STATUS.md`.
+`checkouts.toml`. Inspect or change it with `gopher checkout list`,
+`gopher checkout add <project> <path>`, `gopher checkout remove <project> <path>`, and
+`gopher checkout move <path> <project>`; do not list checkouts in `STATUS.md`.
 
 ## Tools of the trade
 

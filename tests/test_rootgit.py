@@ -73,3 +73,11 @@ def test_save_reports_failed_push(config, tmp_path):
     with pytest.raises(rootgit.SaveError, match="push failed"):
         rootgit.save(config)
     assert run("git", "log", "--format=%s", "-1", cwd=config.root) == "alpha: update STATUS"
+
+
+def test_save_refuses_a_root_that_is_not_a_repository(tmp_path):
+    root = tmp_path / "plain"
+    root.mkdir()
+    (root / "config.toml").write_text("")
+    with pytest.raises(rootgit.SaveError, match="not its own git repository"):
+        rootgit.save(load_config(root))

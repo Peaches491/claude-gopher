@@ -176,7 +176,23 @@ def cmd_prompt(args) -> int:
 
 
 def root_config(args):
-    return load_config(resolve_root(args.root))
+    root = resolve_root(args.root)
+    if not (root / ROOT_CONFIG).is_file():
+        raise ConfigError(f"{root} is not a gopher root (no {ROOT_CONFIG}); create one with gopher setup")
+    return load_config(root)
+
+
+def checkout_target(config, project: str | None, path: str | None) -> tuple[str, Path]:
+    known = project is not None and (config.projects_dir / project).is_dir() and Path(project).name == project
+    if project is not None and not known and path is None:
+        project, path = None, project
+    if project is None:
+        project = workon.project_dir_at(config, os.getcwd())
+        if project is None:
+            raise FileNotFoundError(f"{path or '.'} names no project and {os.getcwd()} is not inside one; usage: gopher checkout add <project> <path>")
+    elif not known:
+        raise FileNotFoundError(f"no project {project!r} in {config.projects_dir}; usage: gopher checkout add <project> <path>")
+    return project, Path(path or ".").expanduser().resolve()
 
 
 def ask(prompt: str, default: str | None = None) -> str:
@@ -522,7 +538,7 @@ def cmd_project_rename(args) -> int:
 
 def cmd_checkout_add(args) -> int:
     config = root_config(args)
-    path = Path(args.path).expanduser().resolve()
+    args.project, path = checkout_target(config, args.project, args.path)
     add_checkout(config.projects_dir, args.project, path)
     others = [o for o in owners(config.projects_dir, path) if o != args.project]
     if others:
@@ -532,7 +548,7 @@ def cmd_checkout_add(args) -> int:
 
 def cmd_checkout_remove(args) -> int:
     config = root_config(args)
-    path = Path(args.path).expanduser().resolve()
+    args.project, path = checkout_target(config, args.project, args.path)
     if not remove_checkout(config.projects_dir, args.project, path):
         print(f"{path} is not a checkout of {args.project}", file=sys.stderr)
         return 1
@@ -717,13 +733,13 @@ def build_parser() -> argparse.ArgumentParser:
     project_rename.set_defaults(func=cmd_project_rename)
 
     checkout = sub.add_parser("checkout", help="manage project checkouts").add_subparsers(dest="checkout_command", required=True)
-    checkout_add = checkout.add_parser("add", help="give a project a checkout")
-    checkout_add.add_argument("project")
-    checkout_add.add_argument("path", nargs="?", default=".")
+    checkout_add = checkout.add_parser("add", help="give a project a checkout: add <project> <path>, or add <path> inside a project dir")
+    checkout_add.add_argument("project", nargs="?")
+    checkout_add.add_argument("path", nargs="?")
     checkout_add.set_defaults(func=cmd_checkout_add)
-    checkout_remove = checkout.add_parser("remove", help="drop a checkout from a project")
-    checkout_remove.add_argument("project")
-    checkout_remove.add_argument("path", nargs="?", default=".")
+    checkout_remove = checkout.add_parser("remove", help="drop a checkout from a project: remove <project> <path>")
+    checkout_remove.add_argument("project", nargs="?")
+    checkout_remove.add_argument("path", nargs="?")
     checkout_remove.set_defaults(func=cmd_checkout_remove)
     checkout_move = checkout.add_parser("move", help="transfer a checkout to a project")
     checkout_move.add_argument("path")

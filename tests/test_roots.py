@@ -167,3 +167,30 @@ def test_existing_tmp_ignore_is_respected(tmp_path, existing):
     (root / ".gitignore").write_text(existing)
     assert ensure_tmp_ignored(root) is False
     assert (root / ".gitignore").read_text() == existing
+
+
+def test_checkout_add_never_writes_into_a_checkout(tmp_path, monkeypatch, capsys):
+    root = tmp_path / "root"
+    assert cli.main(["new", str(root), "--name", "work"]) == 0
+    assert cli.main(["project", "new", "a"]) == 0
+    checkout = tmp_path / "repo"
+    checkout.mkdir()
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["checkout", "add", str(checkout)]) == 1
+    assert "usage: gopher checkout add <project> <path>" in capsys.readouterr().err
+    assert cli.main(["checkout", "add", "nope", str(checkout)]) == 1
+    assert not (checkout / "checkouts.toml").exists()
+    monkeypatch.chdir(root / "projects" / "a")
+    assert cli.main(["checkout", "add", str(checkout)]) == 0
+    assert read_checkouts(root / "projects" / "a") == [checkout]
+    assert cli.main(["checkout", "remove", str(checkout)]) == 0
+    assert read_checkouts(root / "projects" / "a") == []
+    assert not (checkout / "checkouts.toml").exists()
+
+
+def test_commands_refuse_a_directory_that_is_not_a_root(tmp_path, capsys):
+    stray = tmp_path / "stray"
+    stray.mkdir()
+    assert cli.main(["--root", str(stray), "project", "new", "demo"]) == 1
+    assert "is not a gopher root" in capsys.readouterr().err
+    assert not (stray / "projects").exists()

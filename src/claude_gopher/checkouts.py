@@ -55,17 +55,22 @@ def project_for_cwd(projects_dir: Path, cwd: str) -> str | None:
     return best[0] if best else None
 
 
-def add_checkout(projects_dir: Path, project: str, checkout: Path) -> None:
+def existing_project_dir(projects_dir: Path, project: str) -> Path:
     project_dir = projects_dir / project
-    if not project_dir.is_dir():
+    if Path(project).name != project or project in ("", ".", "..") or not project_dir.is_dir():
         raise FileNotFoundError(f"no project {project!r} in {projects_dir}")
+    return project_dir
+
+
+def add_checkout(projects_dir: Path, project: str, checkout: Path) -> None:
+    project_dir = existing_project_dir(projects_dir, project)
     current = read_checkouts(project_dir)
     if checkout not in current:
         write_checkouts(project_dir, [*current, checkout])
 
 
 def remove_checkout(projects_dir: Path, project: str, checkout: Path) -> bool:
-    project_dir = projects_dir / project
+    project_dir = existing_project_dir(projects_dir, project)
     current = read_checkouts(project_dir)
     if checkout not in current:
         return False

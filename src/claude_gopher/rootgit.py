@@ -85,6 +85,8 @@ def busy(root: Path) -> str | None:
 
 def save(config: Config, push: bool = True, dry_run: bool = False) -> SaveReport:
     root = config.root
+    if git(root, "rev-parse", "--show-toplevel", check=False).stdout.strip() != str(root.resolve()):
+        raise SaveError(f"{root} is not its own git repository; run git init there (and add a remote) to save it")
     if marker := busy(root):
         raise SaveError(f"a git operation is in progress in {root} ({marker}); finish it first")
     groups = group_changes(config, changed_paths(root))
