@@ -17,7 +17,7 @@ next to it shows every active project at a glance.
 | Topic | Decision |
 |---|---|
 | Placement | Window 0 of the main session and a `prefix g` popup, both showing the same window (owned by a `gopher` session, linked into the main session at index 0) |
-| Layout | TUI (Python + Textual) left, real Claude Code Gopher session right |
+| Layout | Gopher's window is the Claude Code Gopher session alone; the TUI runs as a sidebar in each project window (originally TUI left, Gopher right) |
 | Delivery | Inbox by default; wake a live agent only when you say so ("tell X now") |
 | Busy target | Queue in inbox, wake automatically when the agent goes idle |
 | Pickup | Hook injects unread inbox items at session start and each prompt. Email model: the agent summarizes and the user decides; items never pull the agent off the user's request |
@@ -531,7 +531,7 @@ Scripts, not agents, do the destructive parts; agents/Gopher only propose them.
 3. Inbox hooks (inject + Stop wake), tested against one project. **(done)**
 4. Gopher prompt + `gopher launch` + popup binding. **(built; session and popup run live, window 0
    link not yet confirmed by the user)**
-5. TUI. **(first pass)** `gopher tui`, run in the left pane by `gopher launch`.
+5. TUI. **(done)** `gopher tui`; since the sidebar (5b) it runs in each project window, not beside Gopher.
 6. `gopher archive|close|reopen`. **(done)**
 7. `gopher workon` (agent, term, source, where, link, unlink), absorbing `workon.py` /
    `runagent` from `~/ai_setup`. **(done)** Then migrate `~/ai_setup` data into `~/workon`.
