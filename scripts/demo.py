@@ -2,8 +2,8 @@
 
 Usage: uv run python scripts/demo.py OUT_DIR
 
-Writes OUT_DIR/dashboard.svg, OUT_DIR/sidebar.svg and OUT_DIR/frames/NNN.svg (a scripted walk
-through the sidebar). Nothing here touches tmux, Claude Code, or the real root.
+Writes OUT_DIR/dashboard.svg and OUT_DIR/sidebar.svg. scripts/demo_tmux.py reuses the root for
+the GIF. Nothing here touches tmux, Claude Code, or the real root.
 """
 
 import asyncio
@@ -15,7 +15,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from claude_gopher import overview, tui
+from claude_gopher import overview, schedule, tui
 from claude_gopher.checkouts import add_checkout
 from claude_gopher.config import load_config
 from claude_gopher.roots import create_project, create_root
@@ -145,6 +145,26 @@ def build_root(home: Path):
     return config, sessions
 
 
+def back_up_root(home: Path, root: Path) -> None:
+    env = {**os.environ, **git_env(home)}
+    hour_ago = f"@{int(time.time()) - 3600} +0000"
+
+    def git(*argv: str, **extra: str) -> None:
+        subprocess.run(["git", "-C", str(root), *argv], check=True, capture_output=True, env={**env, **extra})
+
+    remote = home / "backup.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True, capture_output=True, env=env)
+    git("add", "-A")
+    git("commit", "-q", "--allow-empty", "-m", "demo projects", GIT_AUTHOR_DATE=hour_ago, GIT_COMMITTER_DATE=hour_ago)
+    git("remote", "add", "origin", str(remote))
+    git("push", "-q", "-u", "origin", "HEAD")
+    now = time.time()
+    schedule.save_state(load_config(root), {
+        "last_tick": now - 120,
+        "tasks": {"save": {"last": now - 3600, "seen": now - 86400}, "update-check": {"seen": now - 86400}},
+    })
+
+
 def patch_live_sources(sessions: list[dict]) -> None:
     overview.current_sessions = lambda config, prune=True: [dict(s) for s in sessions]
     tui.focused_panes = lambda: {}
@@ -158,18 +178,6 @@ def clean_svg(svg: str) -> str:
         svg = svg[:start] + svg[end + 1:]
         start = svg.find("@font-face")
     return svg.replace('"Fira Code"', '"DejaVu Sans Mono"')
-
-
-class Recorder:
-    def __init__(self, app, directory: Path):
-        self.app, self.directory, self.count = app, directory, 0
-        directory.mkdir(parents=True, exist_ok=True)
-
-    def frame(self, repeat: int = 1) -> None:
-        svg = clean_svg(self.app.export_screenshot(title="gopher"))
-        for _ in range(repeat):
-            (self.directory / f"{self.count:03d}.svg").write_text(svg)
-            self.count += 1
 
 
 def make_app(config, sessions, pinned):
@@ -199,37 +207,6 @@ async def capture_sidebar(config, sessions, out: Path) -> None:
     async with app.run_test(size=(52, 52)) as pilot:
         await settle(app, pilot)
         (out / "sidebar.svg").write_text(clean_svg(app.export_screenshot(title="gopher sidebar")))
-        recorder = Recorder(app, out / "frames")
-        recorder.frame(repeat=6)
-        for key in ["j"] * 3 + ["k"] * 3:
-            await pilot.press(key)
-            await pilot.pause()
-            recorder.frame(repeat=3)
-        await pilot.press("k")
-        await pilot.pause()
-        recorder.frame(repeat=4)
-        for key in ["l", "l", "l", "l", "l"]:
-            await pilot.press(key)
-            await pilot.pause()
-            recorder.frame(repeat=6)
-        await pilot.press("enter")
-        await pilot.pause()
-        recorder.frame(repeat=10)
-        await pilot.press("escape")
-        await pilot.pause()
-        await pilot.press("j")
-        await pilot.pause()
-        recorder.frame(repeat=3)
-        await pilot.press("slash")
-        await pilot.pause()
-        for key in "pay":
-            await pilot.press(key)
-            await pilot.pause()
-            recorder.frame(repeat=3)
-        recorder.frame(repeat=6)
-        await pilot.press("escape")
-        await pilot.pause()
-        recorder.frame(repeat=6)
 
 
 def main() -> int:
@@ -242,6 +219,7 @@ def main() -> int:
             os.environ.pop(key, None)
         os.environ["GOPHER_HOME"] = str(home / "workon")
         config, sessions = build_root(home)
+        back_up_root(home, config.root)
         patch_live_sources(sessions)
         asyncio.run(capture_dashboard(config, sessions, out))
         asyncio.run(capture_sidebar(config, sessions, out))

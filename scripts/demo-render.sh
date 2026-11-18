@@ -1,6 +1,6 @@
 #!/bin/sh
 # Regenerate the README images: docs/images/{dashboard,sidebar}.png and docs/images/demo.gif.
-# Needs uv, a headless-capable Chrome (google-chrome or $CHROME), and ImageMagick (convert).
+# Needs uv, tmux, a headless-capable Chrome (google-chrome or $CHROME), and ImageMagick (convert).
 set -eu
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -22,16 +22,5 @@ render() {
 render "$work/dashboard.svg" "$images/dashboard.png" 1.5
 render "$work/sidebar.svg" "$images/sidebar.png" 1.5
 
-previous=""
-for frame in "$work"/frames/*.svg; do
-    digest=$(md5sum < "$frame")
-    if [ "$digest" = "$previous" ]; then
-        cp "$last" "${frame%.svg}.png"
-    else
-        render "$frame" "${frame%.svg}.png" 1
-        last="${frame%.svg}.png"
-    fi
-    previous=$digest
-done
-convert -delay 15 -loop 0 "$work"/frames/*.png -layers Optimize "$images/demo.gif"
+(cd "$repo" && uv run python scripts/demo_tmux.py "$images/demo.gif")
 ls -l "$images"
