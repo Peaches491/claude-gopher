@@ -38,7 +38,10 @@ those files.
    the tasks there, then ask what else should happen on a cadence: reminders, reviews, recurring
    checks of a dashboard or channel. Write each as `{{schedule_dir}}/<task>.md`, and change or delete
    defaults only when the user asks (-> `{{schedule_dir}}/`).
-8. Anything else every agent here should know: team names, routing hints for Gopher, resource
+8. Where shared knowledge lives and how agents reach it: chat (for example Slack), documents
+   (for example Google Docs), wikis, dashboards, and which tools or MCP servers read them. Record
+   only what the user actually uses (-> `all.md`, `gopher.md`, `resources.md`).
+9. Anything else every agent here should know: team names, routing hints for Gopher, resource
    kinds beyond the core ones (-> `all.md`, `gopher.md`, `resources.md`).
 
 ## Finishing

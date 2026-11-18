@@ -744,7 +744,7 @@ def test_backup_line_sits_below_the_footer(config, monkeypatch):
 
     async def steps(app, pilot):
         line = app.query_one("#backup", tui.Static)
-        assert str(line.render()) == "backup: saved 10m ago, unsaved +12 -3 ~2; heartbeat not started"
+        assert str(line.render()) == "\U0001f4be 10m +12 -3 ~2  \U0001f493 off"
         assert line.region.y > app.query_one(tui.Footer).region.y
 
     drive_app(app, steps)

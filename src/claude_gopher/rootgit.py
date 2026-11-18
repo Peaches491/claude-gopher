@@ -144,6 +144,7 @@ def ahead(root: Path) -> bool:
 
 
 BACKUP_GRACE_SECONDS = 30 * 60
+SAVE_ICON, CLEAN_ICON, UNPUSHED_ICON, WARN_ICON = "\U0001f4be", "\u2713", "\u21e1", "\u26a0"
 
 
 @dataclass
@@ -168,10 +169,26 @@ class BackupStatus:
             return "error"
         return "overdue" if self.overdue(now, every_hours) else "ok"
 
+    def compact(self, now: float, every_hours: float) -> str:
+        if self.error:
+            return f"{SAVE_ICON} {self.error}"
+        parts = [SAVE_ICON, age(now - self.last_commit) if self.last_commit is not None else "never"]
+        if self.overdue(now, every_hours):
+            parts.append(f"(every {every_hours:g}h)")
+        if self.changed:
+            parts.append(self.counts())
+        if self.unpushed is None:
+            parts.append(f"{WARN_ICON} no upstream")
+        elif self.unpushed:
+            parts.append(f"{UNPUSHED_ICON}{self.unpushed}")
+        elif not self.changed:
+            parts.append(CLEAN_ICON)
+        return " ".join(parts)
+
     def describe(self, now: float, every_hours: float) -> str:
         if self.error:
             return f"backup: {self.error}"
-        parts = [f"saved {age(now - self.last_commit)} ago" if self.last_commit else "never saved"]
+        parts = [f"saved {age(now - self.last_commit)} ago" if self.last_commit is not None else "never saved"]
         if self.overdue(now, every_hours):
             parts[0] += f" (due every {every_hours:g}h)"
         if self.changed:

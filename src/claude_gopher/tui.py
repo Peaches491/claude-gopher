@@ -962,7 +962,7 @@ class GopherTUI(App):
         if now - self.backup_checked >= BACKUP_REFRESH_SECONDS:
             self.backup, self.backup_checked = backup_status(self.config.root), now
             self.save_hours = schedule.save_interval_hours(self.config)
-        self.heartbeat = schedule.heartbeat_summary(self.config, now)
+        self.heartbeat = schedule.heartbeat_compact(self.config, now)
         self.call_from_thread(self.show, projects)
 
     async def show(self, projects: list[dict]) -> None:
@@ -996,10 +996,10 @@ class GopherTUI(App):
         if not self.backup:
             return
         now = time.time()
-        line = Text(self.backup.describe(now, self.save_hours), style=BACKUP_STYLES[self.backup.level(now, self.save_hours)])
+        line = Text(self.backup.compact(now, self.save_hours), style=BACKUP_STYLES[self.backup.level(now, self.save_hours)])
         if self.heartbeat:
             text, stalled = self.heartbeat
-            line.append("; ", style="bright_black")
+            line.append("  ")
             line.append(text, style="yellow" if stalled else "bright_black")
         line.truncate(max(self.size.width - 2, 1), overflow="ellipsis")
         self.query_one("#backup", Static).update(line)

@@ -123,7 +123,7 @@ class Acks:
 
 
 def attention(session: dict, acks: dict[str, float]) -> str | None:
-    if (session.get("location") or {}).get("blocked_creds"):
+    if session.get("blocked_creds") or (session.get("location") or {}).get("blocked_creds"):
         return CREDS
     finished = session.get("finished")
     if session.get("state") == IDLE and finished and finished > acks.get(session.get("session_id"), 0):

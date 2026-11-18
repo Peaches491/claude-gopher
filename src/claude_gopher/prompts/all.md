@@ -69,6 +69,11 @@ Projects deal in repositories, a build system, a ticket tracker, and pull reques
 requests). Which ones, and how to use them here, is site-specific; see the Site section below
 when present.
 
+When work cannot go on without credentials the user has to renew (an expired token, a failed
+login), first check whether they are already valid (the Site section may say how), then run
+`gopher needs-login` so the sidebar shows this agent as needing login, and tell the user which
+login to run. The mark clears when the user next messages you.
+
 ## Gopher commands
 
 `gopher projects` (all projects and their agents), `gopher agents` (running agents),

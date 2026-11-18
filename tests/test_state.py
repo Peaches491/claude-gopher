@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from claude_gopher import state
+from claude_gopher import overview, state
 from claude_gopher.checkouts import add_checkout
 from claude_gopher.state import IDLE, WAITING, WORKING, apply_event, list_sessions, state_for
 
@@ -162,3 +162,20 @@ def test_finished_set_on_stop_and_cleared_on_next_turn(tmp_path):
     assert json.loads((sessions / "s1.json").read_text())["finished"] == 2.0
     apply_event(event("UserPromptSubmit"), sessions, tmp_path / "projects", env, now=4.0)
     assert "finished" not in json.loads((sessions / "s1.json").read_text())
+
+
+def test_needs_login_marks_the_pane_and_clears_on_the_next_prompt(tmp_path):
+    sessions, projects = tmp_path / "sessions", tmp_path / "projects"
+    projects.mkdir()
+    env = {"TMUX_PANE": "%7"}
+    state.apply_event({"session_id": "s1", "hook_event_name": "Stop", "cwd": str(tmp_path)}, sessions, projects, env, now=1.0)
+    assert state.mark_needs_login(sessions, "%9", True) == []
+    assert state.mark_needs_login(sessions, "%7", True, now=2.0) == ["s1"]
+    record = state.read_record(state.session_file(sessions, "s1"))
+    assert record["blocked_creds"] == 2.0
+    assert overview.attention(record, {}) == overview.CREDS
+    state.apply_event({"session_id": "s1", "hook_event_name": "UserPromptSubmit", "cwd": str(tmp_path)}, sessions, projects, env, now=3.0)
+    assert "blocked_creds" not in state.read_record(state.session_file(sessions, "s1"))
+    state.mark_needs_login(sessions, "%7", True)
+    state.mark_needs_login(sessions, "%7", False)
+    assert "blocked_creds" not in state.read_record(state.session_file(sessions, "s1"))

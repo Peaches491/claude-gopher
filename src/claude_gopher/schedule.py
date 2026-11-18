@@ -534,6 +534,25 @@ def heartbeat_summary(config: Config, now: float | None = None) -> tuple[str, bo
     return text, now - last > HEARTBEAT_STALE_SECONDS
 
 
+HEARTBEAT_ICON, NEXT_ICON = "\U0001f493", "\u23ed"
+
+
+def heartbeat_compact(config: Config, now: float | None = None) -> tuple[str, bool] | None:
+    now = now or time.time()
+    last = load_state(config).get("last_tick")
+    if not schedule_dir(config).is_dir() and not last:
+        return None
+    if not last:
+        return f"{HEARTBEAT_ICON} off", False
+    text = f"{HEARTBEAT_ICON} {format_age(now - last)}"
+    rows, _ = listing(config, now)
+    upcoming = sorted((row for row in rows if row.next), key=lambda row: row.next)
+    if upcoming:
+        first = upcoming[0]
+        text += f"  {NEXT_ICON} {first.name} " + ("now" if first.next <= now else format_seconds(first.next - now))
+    return text, now - last > HEARTBEAT_STALE_SECONDS
+
+
 def format_seconds(seconds: float) -> str:
     minutes = max(1, int(round(seconds / 60)))
     if minutes < 60:

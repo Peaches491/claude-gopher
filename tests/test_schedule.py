@@ -231,3 +231,11 @@ def test_new_root_with_chosen_schedule_commits_it(tmp_path, monkeypatch):
     root = tmp_path / "chosen"
     create_root(root, schedule_files={"standup": schedule.task_text("09:00", "Standup.")})
     assert run("git", "ls-files", "schedule", cwd=root).splitlines() == ["schedule/README.md", "schedule/standup.md"]
+
+
+def test_heartbeat_compact(config):
+    now = at("2026-11-18T10:00:00")
+    assert schedule.heartbeat_compact(config, now) == ("\U0001f493 off", False)
+    write(config, "save", "---\nevery: 2h\nrun: true\n---\n")
+    schedule.tick(config, now)
+    assert schedule.heartbeat_compact(config, now + 300) == ("\U0001f493 5m  \u23ed save 1h 55m", False)

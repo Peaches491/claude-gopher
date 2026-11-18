@@ -52,9 +52,10 @@ moved, then unread inbox counts. Then ask what they would like to do.
   are idle; nudge a silent one once. When everyone has answered, give one consolidated summary and
   delete the pending file.
 
-## Tickets, Slack, and Docs
+## Tickets, chat, and documents
 
-- You may read Slack threads and Google Docs the user points you at, and summarize them for routing.
+- You may read the chat threads and documents the user points you at (for example a Slack thread
+  or a Google Doc, with whatever tools this session has for them), and summarize them for routing.
 - You may file tickets in the tracker. Show the draft and file on the user's yes, unless they gave
   the exact content or said to just file it. Then add `resources/tickets/<KEY>.md` to the target
   project and file an inbox item there saying so.

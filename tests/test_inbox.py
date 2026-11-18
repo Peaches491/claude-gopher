@@ -144,9 +144,7 @@ def test_list_and_projects_overview(root, tmp_path, monkeypatch, capsys):
     add_item(root / "projects" / "beta", "later", now=NOW)
     add_checkout(root / "projects", "beta", tmp_path / "co")
     monkeypatch.setattr(overview, "current_sessions", lambda config: [{"session_id": "x", "project": "beta", "state": "waiting"}])
-    assert cli.main(["list"]) == 0
-    assert capsys.readouterr().out.splitlines() == ["alpha", "beta   Second one"]
-    assert cli.main(["list", "--names"]) == 0
+    assert cli.main(["projects", "--names"]) == 0
     assert capsys.readouterr().out.split() == ["alpha", "beta"]
     assert cli.main(["projects"]) == 0
     header, first, second = capsys.readouterr().out.splitlines()

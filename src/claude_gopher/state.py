@@ -117,8 +117,25 @@ def apply_event(payload: dict, sessions_dir: Path, projects_dir: Path, env: dict
         record["finished"] = record["updated"]
     elif state != IDLE:
         record.pop("finished", None)
+    if event == "UserPromptSubmit":
+        record.pop("blocked_creds", None)
     write_record(path, record)
     return record
+
+
+def mark_needs_login(sessions_dir: Path, pane: str, blocked: bool, now: float | None = None) -> list[str]:
+    marked = []
+    for path in sorted(sessions_dir.glob("*.json")):
+        record = read_record(path)
+        if not record or record.get("pane") != pane:
+            continue
+        if blocked:
+            record["blocked_creds"] = now if now is not None else time.time()
+        else:
+            record.pop("blocked_creds", None)
+        write_record(path, record)
+        marked.append(record.get("session_id") or path.stem)
+    return marked
 
 
 LEADING_GLYPHS = re.compile(r"^[^\w(\[]+\s*")
@@ -206,6 +223,7 @@ def merge_sessions(hook_records: list[dict], registry: list[dict] | None, projec
             record["project"] = hooked.get("project")
             record["transcript_path"] = hooked.get("transcript_path")
             record["finished"] = hooked.get("finished")
+            record["blocked_creds"] = hooked.get("blocked_creds")
             if hooked.get("updated", 0) > live.get("updated", 0):
                 record.update(state=hooked["state"], event=hooked.get("event"), updated=hooked["updated"])
         else:

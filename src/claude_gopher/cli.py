@@ -13,14 +13,15 @@ from claude_gopher.config import (
     PROACTIVITY_LEVELS, ROOT_CONFIG, ConfigError, gopher_proactivity, load_config, load_registry, resolve_root,
     save_registry, set_gopher_setting,
 )
-from claude_gopher.projects import MAX_PRIORITY, list_projects, project_info, read_priority, write_priority
+from claude_gopher.projects import MAX_PRIORITY, read_priority, write_priority
 from claude_gopher.prompt import CONTEXTS, assemble, is_gopher_session, session_context
 from claude_gopher.roots import RootError, check_name, check_target, create_project, create_root, register_root
 from claude_gopher.overview import current_sessions, project_overview
 from claude_gopher.setup import SetupIO, launch_interview, run_setup
-from claude_gopher import devreload, launch, lifecycle, popup, rename, restore, rootgit, schedule, update, workon
+from claude_gopher import devreload, doctor, launch, lifecycle, popup, rename, restore, rootgit, schedule, update, workon
 from claude_gopher.state import (
     apply_event,
+    mark_needs_login,
     hook_settings,
     location_label,
     resolve_project,
@@ -493,7 +494,7 @@ def cmd_lifecycle(args) -> int:
         return 0
     if not args.yes:
         if not sys.stdin.isatty():
-            print(f"Nothing changed. Rerun with --yes once the user has approved this plan.")
+            print("Nothing changed. Rerun with --yes once the user has approved this plan.")
             return 2
         if not confirm(f"{args.action.capitalize()} {args.project}?"):
             print("Nothing changed.")
@@ -697,12 +698,40 @@ def cmd_agents(args) -> int:
     return 0
 
 
+def cmd_doctor(args) -> int:
+    checks = doctor.run(root_config(args))
+    for check in checks:
+        if args.quiet and check.level == doctor.OK:
+            continue
+        print(f"{check.level:<4}  {check.area:<9}  {check.message}")
+    failed = sum(check.level == doctor.FAIL for check in checks)
+    warned = sum(check.level == doctor.WARN for check in checks)
+    if not args.quiet or failed or warned:
+        print(f"{failed} problem(s), {warned} warning(s)" if failed or warned else "all good")
+    return 1 if failed else 0
+
+
+def cmd_needs_login(args) -> int:
+    config = root_config(args)
+    pane = args.pane or os.environ.get("TMUX_PANE")
+    if not pane:
+        raise RootError("gopher needs-login identifies the agent by its tmux pane; run it inside tmux or pass --pane")
+    marked = mark_needs_login(config.sessions_dir, pane, not args.clear)
+    if not marked:
+        raise RootError(f"no agent session recorded for pane {pane}; are gopher's hooks installed?")
+    print(("cleared" if args.clear else "marked as needing login") + f": {', '.join(marked)}")
+    return 0
+
+
 def truncate(text: str, width: int) -> str:
     return text if len(text) <= width else text[: width - 3] + "..."
 
 
 def cmd_projects(args) -> int:
     config = root_config(args)
+    if args.names:
+        print("\n".join(directory.name for directory in project_dirs(config.projects_dir)))
+        return 0
     projects = project_overview(config)
     if args.json:
         print(json.dumps(projects, indent=2))
@@ -720,16 +749,6 @@ def cmd_projects(args) -> int:
             str(len(project["checkouts"])), truncate(project["summary"], args.width),
         ))
     print_table(("PROJECT", "STATE", "AGENT", "INBOX", "CO", "SUMMARY"), rows)
-    return 0
-
-
-def cmd_list(args) -> int:
-    config = root_config(args)
-    projects = [project_info(directory) for directory in project_dirs(config.projects_dir)]
-    if args.names:
-        print("\n".join(p["name"] for p in projects))
-    elif projects:
-        print_table(("", ""), [(p["name"], truncate(p["summary"], args.width)) for p in projects], show_header=False)
     return 0
 
 
@@ -928,13 +947,19 @@ def build_parser() -> argparse.ArgumentParser:
     agents.add_argument("--no-prune", action="store_true", help="do not delete stale records")
     agents.set_defaults(func=cmd_agents)
 
-    listing = sub.add_parser("list", help="list projects: name and summary")
-    listing.add_argument("--names", action="store_true", help="names only, one per line")
-    listing.add_argument("--width", type=int, default=80, help="truncate summaries to this width")
-    listing.set_defaults(func=cmd_list)
+    doctor_parser = sub.add_parser("doctor", help="check the install: hooks, tmux config, Gopher, backup, schedule and heartbeat, checkouts")
+    doctor_parser.add_argument("-q", "--quiet", action="store_true", help="print only warnings and problems")
+    doctor_parser.set_defaults(func=cmd_doctor)
+
+    needs_login = sub.add_parser("needs-login", help="mark this agent as blocked on credentials (shows 'needs login'; cleared by the user's next message)")
+    needs_login.add_argument("--clear", action="store_true", help="clear the mark now")
+    needs_login.add_argument("--pane", help="the agent's tmux pane (default: $TMUX_PANE)")
+    needs_login.set_defaults(func=cmd_needs_login)
+
 
     projects = sub.add_parser("projects", help="project overview: state, agents, inbox, checkouts, summary")
     projects.add_argument("--json", action="store_true")
+    projects.add_argument("--names", action="store_true", help="project names only, one per line")
     projects.add_argument("--width", type=int, default=80, help="truncate summaries to this width")
     projects.set_defaults(func=cmd_projects)
     COMMANDS.update({choice.dest: choice.help or "" for choice in sub._choices_actions})
