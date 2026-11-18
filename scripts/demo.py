@@ -161,7 +161,7 @@ def back_up_root(home: Path, root: Path) -> None:
     now = time.time()
     schedule.save_state(load_config(root), {
         "last_tick": now - 120,
-        "tasks": {"save": {"last": now - 3600, "seen": now - 86400}, "update-check": {"seen": now - 86400}},
+        "tasks": {"save": {"last": now - 3600, "seen": now - 86400}, "update-check": {"seen": now}},
     })
 
 

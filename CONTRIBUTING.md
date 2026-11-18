@@ -24,8 +24,9 @@ The README's GIF and screenshots come from made-up projects, never a real root:
 scripts/demo-render.sh
 ```
 
-Needs uv, tmux, a headless-capable Chrome (`google-chrome` or `$CHROME`), and ImageMagick
-(`convert`). It writes `docs/images/sidebar.png`, `docs/images/dashboard.png`, and
+Needs uv, tmux, a headless-capable Chrome (`google-chrome` or `$CHROME`), ImageMagick
+(`convert`), and a colour emoji font (e.g. Noto Color Emoji) so the sidebar's status icons
+render. It writes `docs/images/sidebar.png`, `docs/images/dashboard.png`, and
 `docs/images/demo.gif`.
 
 - `scripts/demo.py` builds the throwaway root (projects, PRs, inbox items, agents) and captures the

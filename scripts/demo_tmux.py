@@ -33,6 +33,7 @@ from claude_gopher import state
 from claude_gopher.config import load_config
 
 SOCKET = "gopher-demo"
+REAL_HOME = os.environ.get("HOME", "")
 SESSION = "demo"
 SIDEBAR_WIDTH = 50
 SESSIONS_FILE = "demo-sessions.json"
@@ -234,7 +235,7 @@ def to_png(svg: Path, png: Path) -> None:
         [os.environ.get("CHROME", "google-chrome"), "--headless=new", "--disable-gpu", "--no-sandbox", "--hide-scrollbars",
          "--force-device-scale-factor=1", f"--window-size={int(float(box[2]))},{int(float(box[3]))}",
          f"--screenshot={png}", f"file://{svg}"],
-        check=True, capture_output=True,
+        check=True, capture_output=True, env={**os.environ, "HOME": REAL_HOME},
     )
 
 

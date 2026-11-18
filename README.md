@@ -67,8 +67,8 @@ worktree belongs to what. gopher is built around a few ideas:
 
 *Above: made-up projects in every state. Green is active, yellow waiting on review, red blocked,
 gray no open tmux window.
-On the right of each block: needs input, done (finished, not yet seen), needs login, working,
-idle.*
+On the right of each block: needs input, done (finished, not yet seen), needs login (the agent
+ran `gopher needs-login`), working, idle.*
 
 ## Requirements
 
@@ -99,6 +99,9 @@ alias workon='gopher workon'
 
 # 4. tmux integration: add this line to ~/.tmux.conf, then reload tmux
 #    run-shell 'tmux source-file "$(gopher shell-init tmux --path)"'
+
+# 5. Check everything is wired up
+gopher doctor
 ```
 
 The tmux config ([`examples/tmux.conf`](examples/tmux.conf); the line above sources the installed
@@ -121,14 +124,14 @@ Gopher from anywhere.
 ### Roots
 
 A root holds a deployment: `config.toml`, `prompts/` (your site's text, appended to the core
-prompts), `projects/`, `archived/`, `closed/`, `gopher/` (Gopher's own directory and journal),
+prompts), `schedule/` (Gopher's recurring tasks), `projects/`, `archived/`, `closed/`, `gopher/` (Gopher's own directory and journal),
 `reference/` (a shared library of playbooks), and a gitignored `tmp/`. Roots are registered in
 `$XDG_CONFIG_HOME/claude-gopher/config.toml`. Pick one with `--root` or `$GOPHER_HOME`; inside a
 root, commands find it themselves.
 
 ```bash
 gopher setup --review           # re-run the setup interview on an existing root
-gopher new ~/work2 --name work2 # scriptable: create, git init, register (or --from <git-url>)
+gopher new ~/work2 --name work2 # scriptable: create, git init, register (or --from <git-url>; --default-schedule)
 ```
 
 ### Projects
@@ -154,7 +157,7 @@ updated: 2026-11-17
 ```
 
 ```bash
-gopher projects                         # overview: state, agents, unread inbox, checkouts, summary
+gopher projects                         # overview: state, agents, unread inbox, checkouts, summary (--names, --json)
 gopher agents                           # running agents and their tmux panes
 gopher project new <name> [--checkout <path>]
 gopher project rename <old> <new>       # also renames its windows and session records
@@ -315,11 +318,12 @@ files, then pushes. `--no-push` skips the push; `--dry-run` previews. The `save`
 runs it every two hours by default; Gopher also runs it at the end-of-day wrap and when you ask.
 The root needs to be a git repository with an upstream to push to.
 
-The bottom line of every sidebar shows the backup: when the root was last saved, the unsaved
-changes as `+added -removed ~files` (lines added and removed, files changed), and whether
-everything is pushed, then the heartbeat (below). The backup turns yellow when changes have
-waited longer than the save task's interval (plus half an hour) without a save, and red when the
-root is not a git repository or has no upstream.
+The bottom line of every sidebar shows the backup and the heartbeat, e.g.
+`💾 39m +35 -23 ~6  💓 3m  ⏭ save 1h 21m`: time since the last save, unsaved lines added and
+removed and files changed (✓ when clean, ⇡ for unpushed commits), then the last schedule tick
+and the next task due. The backup turns yellow when changes have waited longer than the save
+task's interval (plus half an hour) without a save, and red when the root is not a git
+repository or has no upstream.
 
 ## The schedule
 
@@ -342,8 +346,15 @@ is a single Claude Code cron job, recreated each session, that runs `gopher sche
 ten minutes. The tick runs what is due, reports events (the backup running overdue; at the
 `proactive` level, projects whose STATUS has not moved in five working days), and prints nothing
 when there is nothing to do, so Gopher stays quiet. `gopher schedule` lists the tasks with their
-last and next runs, and the sidebar's bottom line shows the last heartbeat and the next task due
-(yellow if the heartbeat has stopped for half an hour).
+last and next runs; the heartbeat on the sidebar's bottom line turns yellow if it has been
+silent for half an hour.
+
+## Health check
+
+`gopher doctor` checks the install and the root in one pass: hooks installed and pointing at a
+real `gopher`, tmux config loaded and Gopher running, the backup, the schedule and heartbeat, and
+checkouts that are missing or owned by two projects. It exits non-zero on a problem; `-q` shows
+only what needs attention.
 
 ## Updating
 
