@@ -13,6 +13,7 @@ DEFAULT_PATHS = {
     "state_dir": "tmp/gopher",
     "prompts_dir": "prompts",
     "reference_dir": "reference",
+    "schedule_dir": "schedule",
 }
 DEFAULT_CLAUDE_SESSIONS_DIR = "~/.claude/sessions"
 ROOT_CONFIG = "config.toml"
@@ -32,6 +33,7 @@ class Config:
     state_dir: Path
     prompts_dir: Path
     reference_dir: Path
+    schedule_dir: Path
     claude_sessions_dir: Path
     settings: dict = field(default_factory=dict, compare=False)
 

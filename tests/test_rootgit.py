@@ -81,3 +81,32 @@ def test_save_refuses_a_root_that_is_not_a_repository(tmp_path):
     (root / "config.toml").write_text("")
     with pytest.raises(rootgit.SaveError, match="not its own git repository"):
         rootgit.save(load_config(root))
+
+
+def test_backup_status_counts_unsaved_and_unpushed(config):
+    status = rootgit.backup_status(config.root)
+    assert (status.changed, status.unpushed, status.error) == (0, 0, None)
+    assert status.describe(status.last_commit + 300, 2) == "backup: saved 5m ago, pushed"
+    status_md = config.projects_dir / "alpha" / "STATUS.md"
+    old_lines = len(status_md.read_text().splitlines())
+    status_md.write_text("changed\n")
+    (config.projects_dir / "beta" / "new.md").write_text("one\ntwo\nthree")
+    (config.projects_dir / "beta" / "blob.bin").write_bytes(b"a\0b\n")
+    run("git", "commit", "-q", "--allow-empty", "-m", "local", cwd=config.root)
+    status = rootgit.backup_status(config.root)
+    assert (status.changed, status.unpushed) == (3, 1)
+    assert (status.added, status.removed) == (4, old_lines)
+    assert status.level(status.last_commit + 3600, 2) == "ok"
+    late = status.last_commit + 3 * 3600
+    assert status.level(late, 2) == "overdue"
+    assert status.describe(late, 2) == f"backup: saved 3h ago (due every 2h), unsaved +4 -{old_lines} ~3, 1 unpushed"
+    assert status.level(late, 0) == "ok"
+
+
+def test_backup_status_flags_a_missing_upstream_or_repo(config, tmp_path):
+    run("git", "branch", "--unset-upstream", cwd=config.root)
+    status = rootgit.backup_status(config.root)
+    assert status.level(0, 2) == "error" and "no upstream" in status.describe(status.last_commit, 2)
+    loose = tmp_path / "loose"
+    loose.mkdir()
+    assert rootgit.backup_status(loose).describe(0, 2) == "backup: the root is not its own git repository"

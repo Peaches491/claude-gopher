@@ -65,9 +65,9 @@ def test_editable_installs_are_not_reinstalled(config, monkeypatch, tmp_path):
         update.install(status)
 
 
-def test_gopher_prompt_schedules_the_nightly_check(config):
+def test_gopher_prompt_points_at_the_nightly_check(config):
     text = assemble(config, "gopher")
-    assert "Update checks are on" in text and "`3 0 * * *`" in text
+    assert "Update checks are on" in text and "schedule/update-check.md" in text
     path = config.root / "config.toml"
     path.write_text(path.read_text().replace("[gopher]\n", "[gopher]\nupdate_check = false\n"))
     assert "Update checks are off" in assemble(load_config(config.root), "gopher")

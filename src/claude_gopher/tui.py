@@ -23,7 +23,7 @@ from claude_gopher.config import (
     DEFAULT_IDLE_SECONDS, DEFAULT_SEEN_DWELL_SECONDS, DEFAULT_SUMMARY_LINES, PROACTIVITY_LEVELS, Config, ConfigError, CustomAction, gopher_proactivity, load_config,
     idle_seconds, seen_dwell_seconds, set_gopher_setting, sidebar_summary_lines, tui_actions,
 )
-from claude_gopher import devreload, lifecycle, popup, restore
+from claude_gopher import devreload, lifecycle, popup, restore, schedule
 from claude_gopher.checkouts import read_checkouts
 from claude_gopher.inbox import add_item, mark_read, unread
 from claude_gopher.launch import write_prompt
@@ -34,10 +34,13 @@ from claude_gopher.overview import (
 from claude_gopher.projects import read_frontmatter, write_priority
 from claude_gopher.prompt import assemble
 from claude_gopher.registry import BACKGROUND
+from claude_gopher.rootgit import BackupStatus, backup_status
 from claude_gopher.state import IDLE, LEADING_GLYPHS, WAITING, WORKING, resolve_project
 from claude_gopher.workon import status_editor_command
 
 REFRESH_SECONDS = 5
+BACKUP_REFRESH_SECONDS = 60
+BACKUP_STYLES = {"ok": "bright_black", "overdue": "yellow", "error": "red"}
 RELOAD_CHECK_SECONDS = 2
 RELOAD_ENV = "GOPHER_TUI_RELOADS"
 DETAIL_TIMEOUT = 90
@@ -731,6 +734,9 @@ class GopherTUI(App):
     TITLE = "gopher"
     CSS = """
     #projects { height: 1fr; }
+    #bottom { dock: bottom; height: auto; }
+    #bottom Footer { dock: none; }
+    #backup { height: 1; padding: 0 1; }
     ListItem.card { height: 5; margin-bottom: 1; padding: 0 1; border-left: thick ansi_bright_black; }
     ListItem.card.compact { height: 2; }
     ListItem.card.pstate-active { border-left: thick ansi_green; }
@@ -828,6 +834,10 @@ class GopherTUI(App):
             self.action_problems.append(str(error))
             self.idle_after = DEFAULT_IDLE_SECONDS
         self.reloading = False
+        self.backup: BackupStatus | None = None
+        self.heartbeat: tuple[str, bool] | None = None
+        self.save_hours: float = 0
+        self.backup_checked = 0.0
         self.action_problems: list[str] = []
         try:
             self.summary_lines = sidebar_summary_lines(config)
@@ -863,7 +873,9 @@ class GopherTUI(App):
             yield Rule(id="pinned-rule")
         yield ProjectList(id="projects")
         yield Input(placeholder="/ filter projects: letters in order, or a glob", id="search")
-        yield Footer()
+        with Vertical(id="bottom"):
+            yield Footer()
+            yield Static(id="backup")
 
     def on_mount(self) -> None:
         for problem in self.action_problems:
@@ -947,11 +959,16 @@ class GopherTUI(App):
         if seen:
             self.acks.ack(seen, now)
             projects = mark_open_windows(project_overview(self.config), open_window_names())
+        if now - self.backup_checked >= BACKUP_REFRESH_SECONDS:
+            self.backup, self.backup_checked = backup_status(self.config.root), now
+            self.save_hours = schedule.save_interval_hours(self.config)
+        self.heartbeat = schedule.heartbeat_summary(self.config, now)
         self.call_from_thread(self.show, projects)
 
     async def show(self, projects: list[dict]) -> None:
         self.ordered = projects
         self.projects = {p["name"]: p for p in projects}
+        self.show_backup()
         if self.pinned:
             self.show_pinned()
         rows = sections([p for p in projects if p["name"] != self.pinned and fuzzy_match(self.search, p["name"])])
@@ -974,6 +991,18 @@ class GopherTUI(App):
             view.index = names.index(current["name"])
         else:
             view.index = self.first_card_index()
+
+    def show_backup(self) -> None:
+        if not self.backup:
+            return
+        now = time.time()
+        line = Text(self.backup.describe(now, self.save_hours), style=BACKUP_STYLES[self.backup.level(now, self.save_hours)])
+        if self.heartbeat:
+            text, stalled = self.heartbeat
+            line.append("; ", style="bright_black")
+            line.append(text, style="yellow" if stalled else "bright_black")
+        line.truncate(max(self.size.width - 2, 1), overflow="ellipsis")
+        self.query_one("#backup", Static).update(line)
 
     def show_pinned(self) -> None:
         project = self.pinned_project()

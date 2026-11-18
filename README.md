@@ -8,7 +8,7 @@ and which ones need you. **Gopher**, a secretary agent one keypress away, takes 
 it about any project and routes it to the right place.
 
 <p align="center">
-  <img src="docs/images/demo.gif" alt="The gopher sidebar: a pinned project header with buttons, and every other project below, colour-coded by state" width="420">
+  <img src="docs/images/demo.gif" alt="gopher in tmux: each project window has the sidebar beside its agent; the walkthrough moves through projects, files an inbox note, and jumps between windows" width="900">
 </p>
 
 ## Why
@@ -256,8 +256,8 @@ seen_dwell_seconds = 5    # pane focus needed before "done" counts as seen
 [gopher]
 model = "sonnet"          # model for the Gopher session
 proactivity = "quiet"     # quiet | nudge | proactive
-save_every_hours = 2      # how often Gopher runs gopher save (0 turns it off)
-update_check = true       # nightly check for a new gopher release
+save_every_hours = 2      # save interval for a new schedule/save.md (0: no save task)
+update_check = true       # add schedule/update-check.md to a new schedule
 features = []             # any of "notebook", "changelog"
 ```
 
@@ -311,9 +311,36 @@ With no snapshot, `open` lays out the standard sidebar and agent.
 ## Saving the root
 
 `gopher save` commits the root's changes, one commit per project plus one for the root's own
-files, then pushes. `--no-push` skips the push; `--dry-run` previews. Gopher runs it every
-`save_every_hours`, at the end-of-day wrap, and when you ask. The root needs to be a git
-repository with an upstream to push to.
+files, then pushes. `--no-push` skips the push; `--dry-run` previews. The `save` schedule task
+runs it every two hours by default; Gopher also runs it at the end-of-day wrap and when you ask.
+The root needs to be a git repository with an upstream to push to.
+
+The bottom line of every sidebar shows the backup: when the root was last saved, the unsaved
+changes as `+added -removed ~files` (lines added and removed, files changed), and whether
+everything is pushed, then the heartbeat (below). The backup turns yellow when changes have
+waited longer than the save task's interval (plus half an hour) without a save, and red when the
+root is not a git repository or has no upstream.
+
+## The schedule
+
+Gopher's recurring work lives in the root's `schedule/` directory, one markdown file per task,
+so you can read, edit, and version it like the rest of the root, or ask Gopher to:
+
+```markdown
+---
+every: 10m            # or at: "08:45"; optional days: weekdays, until: 2026-12-01
+---
+Read the release thread and route any bug reports to the api-v2-migration inbox.
+```
+
+`run: <command>` makes the tick run a command first and hand Gopher its output. New roots start
+with `save.md` (`gopher save` every two hours) and `update-check.md` (nightly). Gopher's heartbeat
+is a single Claude Code cron job, recreated each session, that runs `gopher schedule tick` every
+ten minutes. The tick runs what is due, reports events (the backup running overdue; at the
+`proactive` level, projects whose STATUS has not moved in five working days), and prints nothing
+when there is nothing to do, so Gopher stays quiet. `gopher schedule` lists the tasks with their
+last and next runs, and the sidebar's bottom line shows the last heartbeat and the next task due
+(yellow if the heartbeat has stopped for half an hour).
 
 ## Updating
 
@@ -324,7 +351,7 @@ gopher workon sidebar --all --restart
 gopher launch --restart --continue   # restart Gopher, keeping its conversation
 ```
 
-Gopher runs the check nightly and does all of this for you when you say yes. An editable install
+The `update-check` schedule task runs the check nightly; Gopher does all of this for you when you say yes. An editable install
 (`uv tool install -e .`) is updated with `git pull` instead. `gopher launch --restart` without
 `--continue` starts Gopher fresh.
 
@@ -354,6 +381,7 @@ scripts/demo-render.sh            # regenerate the README images from made-up pr
 ```
 
 [docs/design.md](docs/design.md) is the design and its decisions.
+[CONTRIBUTING.md](CONTRIBUTING.md) covers tests, the demo images, and style.
 
 If you hack on the sidebar, there is an opt-in reloader:
 1. Set `[dev] reload = true` in the root's `config.toml`.

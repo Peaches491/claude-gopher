@@ -5,6 +5,7 @@ import subprocess
 from importlib import resources
 from pathlib import Path
 
+from claude_gopher import schedule
 from claude_gopher.config import DEFAULT_PATHS, ROOT_CONFIG, Registry, load_config
 
 SKELETON_DIRS = ("projects_dir", "archived_dir", "closed_dir", "agent_dir", "reference_dir")
@@ -80,6 +81,7 @@ def create_root(target: Path, source_url: str | None = None) -> None:
     else:
         target.mkdir(parents=True, exist_ok=True)
         copy_skeleton(target)
+        schedule.seed(load_config(target))
         git("init", "-q", cwd=target)
         git("add", "-A", cwd=target)
         git("commit", "-q", "-m", "Create gopher root", cwd=target)

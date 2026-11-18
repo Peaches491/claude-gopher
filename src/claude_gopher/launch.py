@@ -2,6 +2,7 @@ import datetime
 import shlex
 import subprocess
 
+from claude_gopher import schedule
 from claude_gopher.config import Config, gopher_features
 from claude_gopher.prompt import SESSION_CONTEXTS, assemble
 from claude_gopher.workon import SIDEBAR_COMMANDS, Agent, WorkonError, agent_argv, pick_agent, run_lines
@@ -14,12 +15,12 @@ PROMPT_FILE = "gopher-prompt.md"
 PROMPT_ENV = "GOPHER_PROMPT_FILE"
 GOPHER_KICKOFF = (
     "Start of session: read every project's STATUS.md frontmatter and human/STATUS.md, and today's journal, "
-    "then give me a short briefing and ask what I'd like to do."
+    "start your heartbeat (see Schedule), then give me a short briefing and ask what I'd like to do."
 )
 GOPHER_RESTART_KICKOFF = (
     "You were just restarted (for example after a gopher update), continuing this conversation. Session-only "
-    "scheduled jobs did not survive: recreate the ones your instructions ask for at the start of a session, and any "
-    "monitors still listed as running in today's journal, then tell me in one line what you rescheduled."
+    "scheduled jobs did not survive: start your heartbeat again (see Schedule), then tell me in one line that it is "
+    "running and what the first tick did."
 )
 AGENT_STATUS = """---
 summary: Gopher agent directory.
@@ -93,6 +94,7 @@ def agent_lines(config: Config, passthrough: list[str], resume: bool = False) ->
 def exec_agent(config: Config, passthrough: list[str], resume: bool = False) -> None:
     ensure_agent_dir(config)
     write_prompt(config)
+    schedule.mark_launched(config)
     run_lines(agent_lines(config, passthrough, resume))
 
 

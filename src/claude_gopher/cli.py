@@ -18,7 +18,7 @@ from claude_gopher.prompt import CONTEXTS, assemble, is_gopher_session, session_
 from claude_gopher.roots import RootError, check_name, check_target, create_project, create_root, register_root
 from claude_gopher.overview import current_sessions, project_overview
 from claude_gopher.setup import SetupIO, launch_interview, run_setup
-from claude_gopher import devreload, launch, lifecycle, popup, rename, restore, rootgit, update, workon
+from claude_gopher import devreload, launch, lifecycle, popup, rename, restore, rootgit, schedule, update, workon
 from claude_gopher.state import (
     apply_event,
     hook_settings,
@@ -529,6 +529,42 @@ def cmd_save(args) -> int:
     return 0
 
 
+def cmd_schedule_tick(args) -> int:
+    report = schedule.tick(root_config(args), dry_run=args.dry_run)
+    if report.sections:
+        print(report.text())
+    return 0
+
+
+def when(timestamp: float | None, now: float) -> str:
+    if timestamp is None:
+        return "-"
+    if timestamp <= now:
+        return "now" if now - timestamp < 60 else f"{schedule.format_age(now - timestamp)} ago"
+    return f"in {schedule.format_seconds(timestamp - now)}"
+
+
+def cmd_schedule_list(args) -> int:
+    config = root_config(args)
+    now = time.time()
+    rows, problems = schedule.listing(config, now)
+    if not rows and not problems:
+        print(f"no tasks in {config.schedule_dir}")
+    if rows:
+        width = max(len(row.name) for row in rows)
+        timing = max(len(row.timing) for row in rows)
+        print(f"{'TASK':<{width}}  {'WHEN':<{timing}}  {'LAST':<9}  {'NEXT':<9}  RUN")
+        for row in rows:
+            last = when(row.last, now) if row.last else "never"
+            line = f"{row.name:<{width}}  {row.timing:<{timing}}  {last:<9}  {when(row.next, now):<9}  {row.run or '-'}"
+            print(line + (f"  ({row.note})" if row.note else ""))
+    for name, problem in problems.items():
+        print(f"{name}: {problem}", file=sys.stderr)
+    if (summary := schedule.heartbeat_summary(config, now)):
+        print(summary[0])
+    return 1 if problems else 0
+
+
 def cmd_project_new(args) -> int:
     config = root_config(args)
     project_dir = create_project(config.projects_dir, args.name, args.summary)
@@ -765,6 +801,14 @@ def build_parser() -> argparse.ArgumentParser:
     saver.add_argument("--no-push", action="store_true", help="commit only")
     saver.add_argument("--dry-run", action="store_true", help="show the commits without making them")
     saver.set_defaults(func=cmd_save)
+
+    scheduler = sub.add_parser("schedule", help="Gopher's recurring tasks (the root's schedule/ directory); tick runs what is due")
+    scheduler.set_defaults(func=cmd_schedule_list)
+    schedule_sub = scheduler.add_subparsers(dest="schedule_command")
+    schedule_tick = schedule_sub.add_parser("tick", help="run the tasks that are due and print what Gopher should do (its heartbeat)")
+    schedule_tick.add_argument("--dry-run", action="store_true", help="show what is due without running or recording it")
+    schedule_tick.set_defaults(func=cmd_schedule_tick)
+    schedule_sub.add_parser("list", help="list tasks with their last and next runs").set_defaults(func=cmd_schedule_list)
 
     project = sub.add_parser("project", help="manage projects").add_subparsers(dest="project_command", required=True)
     project_new = project.add_parser("new", help="create a project")

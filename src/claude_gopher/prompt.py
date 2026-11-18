@@ -28,6 +28,7 @@ def variables(config: Config, project: str | None) -> dict[str, str]:
         "agent_dir": config.agent_dir,
         "prompts_dir": config.prompts_dir,
         "reference_dir": config.reference_dir,
+        "schedule_dir": config.schedule_dir,
         "save_every_hours": gopher_save_every_hours(config),
         "update_check": "on" if gopher_update_check(config) else "off",
         "tmp_dir": config.root / "tmp",

@@ -462,9 +462,8 @@ wake: false
   the inbox list is open.
 - Saving the root: Gopher owns the root repository's history. `gopher save` groups `git status`
   paths by project directory (projects/, archived/, closed/), commits each group with a message
-  naming the areas touched, commits the rest as `root: ...`, and pushes. Gopher schedules it every
-  `[gopher] save_every_hours` with a session-only recurring CronCreate job (re-created each
-  session; CronCreate jobs expire after 7 days) and also runs it at wrap-up and on request.
+  naming the areas touched, commits the rest as `root: ...`, and pushes. The `save` schedule task runs it (section 9);
+  Gopher also runs it at wrap-up and on request.
 - Priority: 0-3 stars in `human/STATUS.md` frontmatter (`priority:`; the user's judgment, so
   never set by project agents), set with `gopher project priority` or the TUI's `+`/`-`. Starred
   projects sort first (stars, then colour group) under a "Priority" label, shown as stars before
@@ -525,12 +524,35 @@ Scripts, not agents, do the destructive parts; agents/Gopher only propose them.
 Releases are `vX.Y.Z` tags on the source repo (`[gopher] update_source`). `gopher update --check`
 lists them with `git ls-remote`; `gopher update` installs the newest with
 `uv tool install --force git+<source>@<tag>` after a typed `yes` (editable installs are told to
-`git pull`). Gopher schedules the check nightly at midnight (`[gopher] update_check`, default on),
+`git pull`). The `update-check` schedule task runs the check nightly (section 9; seeded when `[gopher] update_check` is on),
 mentions a new version once, and on the user's yes installs it, restarts the sidebars
 (`gopher workon sidebar --all --restart`, which respawns each sidebar pane), and restarts itself
 last (`gopher launch --restart --continue`, which respawns the Gopher pane with `claude --continue`).
 `gopher setup --remove-hooks` undoes the hook install. The tmux config ships in the package;
 `gopher shell-init tmux --path` locates it so tmux sources the installed copy.
+
+### 9. Schedule and heartbeat (`gopher schedule`)
+
+Gopher only acts when a message arrives, and Claude Code cron jobs are session-only and expire
+after 7 days, so recurring work described only in the prompt was lost on every restart and left
+nudges and scans with no trigger. The schedule moves it into data:
+
+- `schedule/<task>.md` in the root (versioned, user-editable): frontmatter `every` (10m/2h/1d) or
+  `at` (HH:MM local, daily), optional `days`, `run`, `until`, `enabled`; the body is instructions
+  for Gopher. New roots, and existing ones on their first tick, get `README.md`, `save.md`, and
+  `update-check.md`.
+- `gopher schedule tick` (under a lock) runs every due task's `run` command in the root, records
+  last runs in `tmp/gopher/schedule.json`, and prints one section per due task (command output,
+  then the body), plus events: backup newly overdue, and at the proactive level projects whose
+  STATUS `updated` is five or more weekdays old (each reported once per episode). An `at` task
+  first seen after its slot waits for the next one; a missed slot runs once on the next tick.
+  Ended (`until`) tasks and malformed files are reported once. No output means nothing to do.
+- The heartbeat is one session-only CronCreate job (every 10 minutes at off-minutes) that the
+  kickoff and restart kickoff tell Gopher to create; it runs the tick and acts on the output.
+  `gopher launch --exec-agent` records the start, and the tick asks Gopher to recreate the job
+  after six days, ahead of the 7-day expiry.
+- `gopher schedule` lists tasks; the TUI's bottom line shows the last tick and next task due,
+  yellow once the heartbeat has been silent for 30 minutes.
 
 ## Build order
 

@@ -27,20 +27,46 @@ def git(root: Path, *argv: str, check: bool = True) -> subprocess.CompletedProce
     return result
 
 
-def changed_paths(root: Path) -> list[str]:
+def status_entries(root: Path) -> list[tuple[str, list[str]]]:
     out = git(root, "status", "--porcelain", "-z", "--untracked-files=all").stdout
-    entries = out.split("\0")
-    paths, skip = [], False
+    entries, rows = iter(out.split("\0")), []
     for entry in entries:
-        if skip:
-            paths.append(entry)
-            skip = False
-            continue
         if len(entry) < 4:
             continue
-        paths.append(entry[3:])
-        skip = entry[0] in "RC"
-    return paths
+        paths = [entry[3:]]
+        if entry[0] in "RC":
+            paths.append(next(entries, ""))
+        rows.append((entry[:2], paths))
+    return rows
+
+
+def changed_paths(root: Path) -> list[str]:
+    return [path for _, paths in status_entries(root) for path in paths]
+
+
+UNTRACKED_LINES_LIMIT = 1 << 20
+
+
+def file_lines(path: Path) -> int:
+    try:
+        if path.stat().st_size > UNTRACKED_LINES_LIMIT:
+            return 0
+        data = path.read_bytes()
+    except OSError:
+        return 0
+    if b"\0" in data:
+        return 0
+    return data.count(b"\n") + (1 if data and not data.endswith(b"\n") else 0)
+
+
+def line_counts(root: Path, rows: list[tuple[str, list[str]]]) -> tuple[int, int]:
+    added = removed = 0
+    for line in git(root, "diff", "HEAD", "--numstat", check=False).stdout.splitlines():
+        plus, minus, _ = line.split("\t", 2)
+        if plus.isdigit() and minus.isdigit():
+            added, removed = added + int(plus), removed + int(minus)
+    added += sum(file_lines(root / paths[0]) for code, paths in rows if code == "??")
+    return added, removed
 
 
 def lifecycle_dirs(config: Config) -> list[str]:
@@ -115,3 +141,71 @@ def save(config: Config, push: bool = True, dry_run: bool = False) -> SaveReport
 def ahead(root: Path) -> bool:
     result = git(root, "rev-list", "--count", "@{upstream}..HEAD", check=False)
     return result.returncode == 0 and result.stdout.strip() not in ("", "0")
+
+
+BACKUP_GRACE_SECONDS = 30 * 60
+
+
+@dataclass
+class BackupStatus:
+    last_commit: float | None = None
+    changed: int = 0
+    added: int = 0
+    removed: int = 0
+    unpushed: int | None = None
+    error: str | None = None
+
+    def counts(self) -> str:
+        return f"+{self.added} -{self.removed} ~{self.changed}"
+
+    def overdue(self, now: float, every_hours: float) -> bool:
+        if not every_hours or not (self.changed or self.unpushed):
+            return False
+        return self.last_commit is None or now - self.last_commit > every_hours * 3600 + BACKUP_GRACE_SECONDS
+
+    def level(self, now: float, every_hours: float) -> str:
+        if self.error or self.unpushed is None:
+            return "error"
+        return "overdue" if self.overdue(now, every_hours) else "ok"
+
+    def describe(self, now: float, every_hours: float) -> str:
+        if self.error:
+            return f"backup: {self.error}"
+        parts = [f"saved {age(now - self.last_commit)} ago" if self.last_commit else "never saved"]
+        if self.overdue(now, every_hours):
+            parts[0] += f" (due every {every_hours:g}h)"
+        if self.changed:
+            parts.append(f"unsaved {self.counts()}")
+        if self.unpushed is None:
+            parts.append("no upstream to push to")
+        elif self.unpushed:
+            parts.append(f"{self.unpushed} unpushed")
+        elif not self.changed:
+            parts.append("pushed")
+        return "backup: " + ", ".join(parts)
+
+
+def age(seconds: float) -> str:
+    minutes = max(0, int(seconds // 60))
+    if minutes < 60:
+        return f"{minutes}m"
+    hours, minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours}h {minutes}m" if minutes else f"{hours}h"
+    return f"{hours // 24}d {hours % 24}h"
+
+
+def backup_status(root: Path) -> BackupStatus:
+    if git(root, "rev-parse", "--show-toplevel", check=False).stdout.strip() != str(root.resolve()):
+        return BackupStatus(error="the root is not its own git repository")
+    try:
+        rows = status_entries(root)
+    except SaveError as error:
+        return BackupStatus(error=str(error))
+    stamp = git(root, "log", "-1", "--format=%ct", check=False).stdout.strip()
+    count = git(root, "rev-list", "--count", "@{upstream}..HEAD", check=False)
+    unpushed = int(count.stdout.strip()) if count.returncode == 0 and count.stdout.strip().isdigit() else None
+    added, removed = line_counts(root, rows) if rows else (0, 0)
+    return BackupStatus(
+        last_commit=float(stamp) if stamp else None, changed=len(rows), added=added, removed=removed, unpushed=unpushed,
+    )

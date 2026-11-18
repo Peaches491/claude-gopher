@@ -734,3 +734,17 @@ def test_projects_without_an_open_window_get_a_gray_bar():
     rows = tui.mark_open_windows([project("alpha"), project("beta")], {"alpha", "gopher"})
     assert [tui.state_class(row) for row in rows] == ["pstate-active", "pstate-other"]
     assert tui.state_class(tui.mark_open_windows([project("beta")], None)[0]) == "pstate-active"
+
+
+def test_backup_line_sits_below_the_footer(config, monkeypatch):
+    monkeypatch.setattr(tui, "project_overview", lambda config: [project("alpha")])
+    monkeypatch.setattr(tui, "backup_status", lambda root: tui.BackupStatus(last_commit=time.time() - 600, changed=2, added=12, removed=3, unpushed=0))
+    stub_tmux(monkeypatch)
+    app = tui.GopherTUI(config)
+
+    async def steps(app, pilot):
+        line = app.query_one("#backup", tui.Static)
+        assert str(line.render()) == "backup: saved 10m ago, unsaved +12 -3 ~2; heartbeat not started"
+        assert line.region.y > app.query_one(tui.Footer).region.y
+
+    drive_app(app, steps)
