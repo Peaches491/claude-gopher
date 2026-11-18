@@ -539,8 +539,10 @@ nudges and scans with no trigger. The schedule moves it into data:
 
 - `schedule/<task>.md` in the root (versioned, user-editable): frontmatter `every` (10m/2h/1d) or
   `at` (HH:MM local, daily), optional `days`, `run`, `until`, `enabled`; the body is instructions
-  for Gopher. New roots, and existing ones on their first tick, get `README.md`, `save.md`, and
-  `update-check.md`.
+  for Gopher. New roots get `README.md`, `save.md`, and `update-check.md` (`[gopher]
+  save_every_hours` and `update_check` pick the defaults); `gopher new` and `gopher setup` ask in
+  a terminal whether to keep, retime, or drop each and which tasks to add, and the setup interview
+  reviews it. Existing roots get the defaults on their first tick.
 - `gopher schedule tick` (under a lock) runs every due task's `run` command in the root, records
   last runs in `tmp/gopher/schedule.json`, and prints one section per due task (command output,
   then the body), plus events: backup newly overdue, and at the proactive level projects whose

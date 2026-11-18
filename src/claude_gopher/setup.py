@@ -20,6 +20,7 @@ class SetupIO:
     confirm: Callable[[str, bool], bool]
     say: Callable[[str], None]
     launch: Callable[[Path, str], None]
+    schedule: Callable[[object, Path], dict[str, str] | None] = lambda args, target: None
 
 
 def install_dir() -> Path:
@@ -105,7 +106,7 @@ def run_setup(args, io: SetupIO, settings: Path | None = None) -> int:
             io.say(fix)
         io.say(f"using existing root {target}")
     else:
-        create_root(target, args.source)
+        create_root(target, args.source, io.schedule(args, target))
         io.say(f"{'cloned' if args.source else 'created'} root at {target}")
 
     make_default = args.default

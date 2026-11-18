@@ -47,20 +47,107 @@ what the body says (read a thread, check a dashboard) and reports at most a line
 """
 
 
-def save_task(hours: int) -> str:
-    return (
-        f"---\nevery: {hours}h\nrun: gopher save\n---\n"
-        "Report the save in one line: how many commits and which projects. If it failed (a merge in\n"
-        "progress, a rejected push), tell the user what it said and do not try to fix the repository.\n"
-    )
-
-
-UPDATE_TASK = (
-    '---\nat: "00:03"\nrun: gopher update --check\n---\n'
+SAVE_BODY = (
+    "Report the save in one line: how many commits and which projects. If it failed (a merge in\n"
+    "progress, a rejected push), tell the user what it said and do not try to fix the repository."
+)
+UPDATE_BODY = (
     "If it reports a newer release, do not interrupt the user: note it in the journal and mention it\n"
     "in one line at the next briefing or the next time they talk to you, with the release notes link.\n"
-    "Mention a given version once. Install only when the user says so.\n"
+    "Mention a given version once. Install only when the user says so."
 )
+DEFAULT_UPDATE_AT = "00:03"
+
+
+@dataclass
+class Default:
+    name: str
+    when: str
+    run: str
+    body: str
+    purpose: str
+
+
+def timing_lines(when: str) -> list[str]:
+    every = at = days = None
+    for token in when.replace(" at ", " ").split():
+        token = token.strip().lower()
+        if token == "at":
+            continue
+        if DURATION.match(token):
+            every = token
+        elif CLOCK.match(token):
+            at = token
+        else:
+            days = token
+    if (every is None) == (at is None):
+        raise ScheduleError(f"say when as an interval (30m, 2h, 1d) or a time (09:00), optionally with days, not {when!r}")
+    if every:
+        parse_duration(every)
+    lines = [f"every: {every}"] if every else [f'at: "{at}"']
+    if days:
+        parse_days(days)
+        lines.append(f"days: {days}")
+    return lines
+
+
+def task_text(when: str, body: str, run: str | None = None) -> str:
+    lines = ["---", *timing_lines(when), *([f"run: {run}"] if run else []), "---", body.strip(), ""]
+    return "\n".join(lines)
+
+
+def defaults(config: Config) -> list[Default]:
+    try:
+        hours = gopher_save_every_hours(config)
+        check_updates = gopher_update_check(config)
+    except ConfigError:
+        hours, check_updates = 0, False
+    tasks = []
+    if hours:
+        tasks.append(Default("save", f"{hours}h", "gopher save", SAVE_BODY, "commit and push the root (gopher save)"))
+    if check_updates:
+        tasks.append(Default("update-check", DEFAULT_UPDATE_AT, "gopher update --check", UPDATE_BODY, "check for a new gopher release"))
+    return tasks
+
+
+def default_files(config: Config) -> dict[str, str]:
+    return {task.name: task_text(task.when, task.body, task.run) for task in defaults(config)}
+
+
+def interview(config: Config, ask, say) -> dict[str, str]:
+    say("Gopher's schedule: recurring work its heartbeat runs, one file per task in schedule/.")
+    files = {}
+    for task in defaults(config):
+        say(f"  {task.name}: {task.purpose}, {'every ' if DURATION.match(task.when) else 'daily at '}{task.when}")
+    for task in defaults(config):
+        while True:
+            answer = ask(f"Keep {task.name}? y, n, or a new time ({'e.g. 4h' if DURATION.match(task.when) else 'e.g. 06:30'})", "y").strip()
+            if answer.lower() in ("n", "no"):
+                break
+            when = task.when if answer.lower() in ("y", "yes", "") else answer
+            try:
+                files[task.name] = task_text(when, task.body, task.run)
+                break
+            except ScheduleError as error:
+                say(str(error))
+    while True:
+        name = ask("Add a task? Give it a short name, or press enter to finish", "").strip()
+        if not name:
+            break
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", name) or name in files or name == README.removesuffix(".md"):
+            say("use a new lowercase name with letters, digits and dashes")
+            continue
+        while True:
+            when = ask(f"When should {name} run? (30m, 2h, 1d, 09:00, weekdays 09:00)", "").strip()
+            try:
+                timing_lines(when)
+                break
+            except ScheduleError as error:
+                say(str(error))
+        body = ask(f"What should Gopher do for {name}?", "").strip() or "Remind the user."
+        files[name] = task_text(when, body)
+    say(f"Schedule: {', '.join(files) if files else 'empty'}. Edit schedule/ any time, or ask Gopher.")
+    return files
 
 
 class ScheduleError(Exception):
@@ -137,24 +224,16 @@ def schedule_dir(config: Config) -> Path:
     return config.schedule_dir
 
 
-def seed(config: Config) -> list[Path]:
+def seed(config: Config, files: dict[str, str] | None = None) -> list[Path]:
     directory = schedule_dir(config)
     if directory.exists():
         return []
     directory.mkdir(parents=True)
     written = [directory / README]
     written[0].write_text(SCHEDULE_README)
-    try:
-        hours = gopher_save_every_hours(config)
-        check_updates = gopher_update_check(config)
-    except ConfigError:
-        hours, check_updates = 0, False
-    if hours:
-        written.append(directory / "save.md")
-        written[-1].write_text(save_task(hours))
-    if check_updates:
-        written.append(directory / "update-check.md")
-        written[-1].write_text(UPDATE_TASK)
+    for name, text in (default_files(config) if files is None else files).items():
+        written.append(directory / f"{name}.md")
+        written[-1].write_text(text)
     return written
 
 

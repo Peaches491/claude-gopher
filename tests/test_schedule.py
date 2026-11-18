@@ -184,3 +184,50 @@ def test_save_interval_follows_the_save_task(config):
     assert schedule.save_interval_hours(config) == 0.5
     write(config, "save", "---\nevery: 30m\nenabled: false\n---\n")
     assert schedule.save_interval_hours(config) == 0
+
+
+def answers(*replies):
+    queue = list(replies)
+    asked = []
+
+    def ask(prompt, default=None):
+        asked.append(prompt)
+        reply = queue.pop(0)
+        return reply or default or ""
+
+    return ask, asked
+
+
+def test_timing_lines_accept_intervals_times_and_days():
+    assert schedule.timing_lines("30m") == ["every: 30m"]
+    assert schedule.timing_lines("weekdays at 09:00") == ['at: "09:00"', "days: weekdays"]
+    assert schedule.timing_lines("mon,thu 17:30") == ['at: "17:30"', "days: mon,thu"]
+    with pytest.raises(schedule.ScheduleError):
+        schedule.timing_lines("soonish")
+    with pytest.raises(schedule.ScheduleError):
+        schedule.timing_lines("2h 09:00")
+
+
+def test_interview_keeps_changes_drops_and_adds(config):
+    ask, asked = answers("4h", "n", "standup", "whenever", "weekdays 09:00", "Remind me to post the standup.", "")
+    said = []
+    files = schedule.interview(config, ask, said.append)
+    assert sorted(files) == ["save", "standup"]
+    assert files["save"].startswith("---\nevery: 4h\nrun: gopher save\n---\n")
+    assert files["standup"] == '---\nat: "09:00"\ndays: weekdays\n---\nRemind me to post the standup.\n'
+    assert any("say when" in line for line in said)
+    assert said[-1].startswith("Schedule: save, standup.")
+
+
+def test_interview_defaults_keep_everything(config):
+    ask, _ = answers("", "", "")
+    assert sorted(schedule.interview(config, ask, lambda line: None)) == ["save", "update-check"]
+
+
+def test_new_root_with_chosen_schedule_commits_it(tmp_path, monkeypatch):
+    for key, value in {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t",
+                       "GIT_COMMITTER_EMAIL": "t@example.com", "GIT_CONFIG_GLOBAL": "/dev/null"}.items():
+        monkeypatch.setenv(key, value)
+    root = tmp_path / "chosen"
+    create_root(root, schedule_files={"standup": schedule.task_text("09:00", "Standup.")})
+    assert run("git", "ls-files", "schedule", cwd=root).splitlines() == ["schedule/README.md", "schedule/standup.md"]

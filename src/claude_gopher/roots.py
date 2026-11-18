@@ -70,7 +70,7 @@ def ensure_tmp_ignored(target: Path) -> bool:
     return True
 
 
-def create_root(target: Path, source_url: str | None = None) -> None:
+def create_root(target: Path, source_url: str | None = None, schedule_files: dict[str, str] | None = None) -> None:
     check_target(target)
     if source_url:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -81,7 +81,7 @@ def create_root(target: Path, source_url: str | None = None) -> None:
     else:
         target.mkdir(parents=True, exist_ok=True)
         copy_skeleton(target)
-        schedule.seed(load_config(target))
+        schedule.seed(load_config(target), schedule_files)
         git("init", "-q", cwd=target)
         git("add", "-A", cwd=target)
         git("commit", "-q", "-m", "Create gopher root", cwd=target)

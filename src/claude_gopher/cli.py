@@ -212,11 +212,17 @@ def cmd_new(args) -> int:
     make_default = args.default
     if make_default is None and registry.default and registry.default != name:
         make_default = ask(f"Make {name!r} the default root (current: {registry.default})? y/N", "n").lower().startswith("y")
-    create_root(target, args.source)
+    create_root(target, args.source, choose_schedule(args, target, ask, print))
     register_root(registry, name, target, bool(make_default))
     save_registry(registry)
     print(f"created root {name!r} at {target}" + (" (default)" if registry.default == name else ""))
     return 0
+
+
+def choose_schedule(args, target: Path, ask, say) -> dict[str, str] | None:
+    if args.source or args.default_schedule or not sys.stdin.isatty():
+        return None
+    return schedule.interview(load_config(target), ask, say)
 
 
 CONFIRM_WORD = "yes"
@@ -229,7 +235,10 @@ def confirm(prompt: str, default: bool = False) -> bool:
 
 
 def cmd_setup(args) -> int:
-    return run_setup(args, SetupIO(ask=ask, confirm=confirm, say=print, launch=launch_interview))
+    return run_setup(args, SetupIO(
+        ask=ask, confirm=confirm, say=print, launch=launch_interview,
+        schedule=lambda args, target: choose_schedule(args, target, ask, print),
+    ))
 
 
 def workon_target(args, config, ui):
@@ -733,6 +742,7 @@ def build_parser() -> argparse.ArgumentParser:
     new.add_argument("dir", nargs="?", help="root directory (prompted if omitted)")
     new.add_argument("--name", help="registry name (default: directory basename)")
     new.add_argument("--from", dest="source", metavar="GIT_URL", help="clone an existing root")
+    new.add_argument("--default-schedule", action="store_true", help="use the default schedule without asking")
     default = new.add_mutually_exclusive_group()
     default.add_argument("--default", dest="default", action="store_true", default=None)
     default.add_argument("--no-default", dest="default", action="store_false")
@@ -742,6 +752,7 @@ def build_parser() -> argparse.ArgumentParser:
     setup.add_argument("dir", nargs="?", help="root directory (prompted if omitted)")
     setup.add_argument("--name", help="registry name (default: directory basename)")
     setup.add_argument("--from", dest="source", metavar="GIT_URL", help="clone an existing root")
+    setup.add_argument("--default-schedule", action="store_true", help="use the default schedule without asking")
     setup_default = setup.add_mutually_exclusive_group()
     setup_default.add_argument("--default", dest="default", action="store_true", default=None)
     setup_default.add_argument("--no-default", dest="default", action="store_false")

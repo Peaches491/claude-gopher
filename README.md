@@ -334,7 +334,10 @@ Read the release thread and route any bug reports to the api-v2-migration inbox.
 ```
 
 `run: <command>` makes the tick run a command first and hand Gopher its output. New roots start
-with `save.md` (`gopher save` every two hours) and `update-check.md` (nightly). Gopher's heartbeat
+with `save.md` (`gopher save` every two hours) and `update-check.md` (nightly at 00:03):
+`gopher new` and `gopher setup` show them and ask whether to keep, retime, or drop each, and
+what else to add (`--default-schedule` skips the questions). The setup interview reviews the
+schedule too. Gopher's heartbeat
 is a single Claude Code cron job, recreated each session, that runs `gopher schedule tick` every
 ten minutes. The tick runs what is due, reports events (the backup running overdue; at the
 `proactive` level, projects whose STATUS has not moved in five working days), and prints nothing

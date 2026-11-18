@@ -34,7 +34,11 @@ those files.
 6. Lifecycle: what archiving and closing should clean up per checkout (caches, output dirs), and
    what happens to tickets and branches (-> `archive.md`, `close.md`,
    `config.toml [lifecycle] on_archive / on_close`).
-7. Anything else every agent here should know: team names, routing hints for Gopher, resource
+7. Schedule: Gopher's recurring work in `{{schedule_dir}}/` (read its `README.md`). Show the user
+   the tasks there, then ask what else should happen on a cadence: reminders, reviews, recurring
+   checks of a dashboard or channel. Write each as `{{schedule_dir}}/<task>.md`, and change or delete
+   defaults only when the user asks (-> `{{schedule_dir}}/`).
+8. Anything else every agent here should know: team names, routing hints for Gopher, resource
    kinds beyond the core ones (-> `all.md`, `gopher.md`, `resources.md`).
 
 ## Finishing
@@ -49,6 +53,7 @@ message shape (the kickoff message says which subject to use):
 Written by the gopher setup interview.
 
 - prompts/<context>.md: <one line on what it covers>
+- schedule/<task>.md: <one line on what it runs and when>
 - config.toml: <one line on what changed>
 ```
 
