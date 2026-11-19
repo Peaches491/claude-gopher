@@ -7,7 +7,7 @@ import time
 import traceback
 from pathlib import Path
 
-from claude_gopher.checkouts import add_checkout, all_checkouts, owners, project_dirs, read_checkouts, remove_checkout
+from claude_gopher.checkouts import add_checkout, all_checkouts, all_shared, owners, project_dirs, read_checkouts, remove_checkout
 from claude_gopher.inbox import PROMPT, RESET_SOURCES, START, Tracker, add_item, inbox_context, inbox_notice, unread, wake_reason
 from claude_gopher.config import (
     PROACTIVITY_LEVELS, ROOT_CONFIG, ConfigError, gopher_proactivity, load_config, load_registry, resolve_root,
@@ -647,10 +647,10 @@ def cmd_project_rename(args) -> int:
 def cmd_checkout_add(args) -> int:
     config = root_config(args)
     args.project, path = checkout_target(config, args.project, args.path)
-    add_checkout(config.projects_dir, args.project, path)
+    add_checkout(config.projects_dir, args.project, path, args.shared)
     others = [o for o in owners(config.projects_dir, path) if o != args.project]
-    if others:
-        print(f"note: {path} is also owned by {', '.join(others)}", file=sys.stderr)
+    if others and path not in all_shared(config.projects_dir):
+        print(f"note: {path} is also owned by {', '.join(others)}; add --shared if it is shared on purpose", file=sys.stderr)
     return 0
 
 
@@ -677,7 +677,9 @@ def cmd_checkout_move(args) -> int:
 
 def cmd_checkout_list(args) -> int:
     config = root_config(args)
-    print_table(("PROJECT", "CHECKOUT"), [(name, str(path)) for name, path in all_checkouts(config.projects_dir)])
+    shared = all_shared(config.projects_dir)
+    rows = [(name, str(path), "shared" if path in shared else "") for name, path in all_checkouts(config.projects_dir)]
+    print_table(("PROJECT", "CHECKOUT", "SHARED"), rows)
     return 0
 
 
@@ -884,6 +886,8 @@ def build_parser() -> argparse.ArgumentParser:
     checkout_add = checkout.add_parser("add", help="give a project a checkout: add <project> <path>, or add <path> inside a project dir")
     checkout_add.add_argument("project", nargs="?")
     checkout_add.add_argument("path", nargs="?")
+    checkout_add.add_argument("--shared", action=argparse.BooleanOptionalAction, default=None,
+                              help="a long-lived checkout used across projects: close and archive leave it alone, and several projects may list it")
     checkout_add.set_defaults(func=cmd_checkout_add)
     checkout_remove = checkout.add_parser("remove", help="drop a checkout from a project: remove <project> <path>")
     checkout_remove.add_argument("project", nargs="?")

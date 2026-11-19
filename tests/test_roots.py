@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from claude_gopher import cli
-from claude_gopher.checkouts import add_checkout, project_for_cwd, read_checkouts
+from claude_gopher.checkouts import add_checkout, project_for_cwd, read_checkouts, shared_checkouts
 from claude_gopher.config import ConfigError, Registry, load_config, load_registry, resolve_root, save_registry
 from claude_gopher.projects import read_frontmatter
 from claude_gopher.roots import RootError, create_project, create_root, ensure_tmp_ignored
@@ -194,3 +194,25 @@ def test_commands_refuse_a_directory_that_is_not_a_root(tmp_path, capsys):
     assert cli.main(["--root", str(stray), "project", "new", "demo"]) == 1
     assert "is not a gopher root" in capsys.readouterr().err
     assert not (stray / "projects").exists()
+
+
+def test_checkout_add_shared_is_recorded_and_listed(tmp_path, monkeypatch, capsys):
+    root = tmp_path / "root"
+    assert cli.main(["new", str(root), "--name", "work", "--default-schedule"]) == 0
+    for name in ("a", "b"):
+        assert cli.main(["--root", str(root), "project", "new", name]) == 0
+    checkout = tmp_path / "repo"
+    checkout.mkdir()
+    capsys.readouterr()
+    assert cli.main(["--root", str(root), "checkout", "add", "a", str(checkout), "--shared"]) == 0
+    assert cli.main(["--root", str(root), "checkout", "add", "b", str(checkout)]) == 0
+    assert "also owned" not in capsys.readouterr().err
+    assert "shared = true" in (root / "projects" / "a" / "checkouts.toml").read_text()
+    assert shared_checkouts(root / "projects" / "a") == {checkout}
+    assert cli.main(["--root", str(root), "checkout", "list"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].split() == ["PROJECT", "CHECKOUT", "SHARED"]
+    assert lines[1].split() == ["a", str(checkout), "shared"]
+    assert cli.main(["--root", str(root), "checkout", "add", "a", str(checkout), "--no-shared"]) == 0
+    assert shared_checkouts(root / "projects" / "a") == set()
+    assert read_checkouts(root / "projects" / "a") == [checkout]

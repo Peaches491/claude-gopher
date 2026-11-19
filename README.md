@@ -163,6 +163,7 @@ gopher project new <name> [--checkout <path>]
 gopher project rename <old> <new>       # also renames its windows and session records
 gopher project priority <name> [0-3|+|-]
 gopher checkout add <project> <path>    # or `gopher checkout add <path>` from inside a project dir
+gopher checkout add --shared <p> <path>  # used across projects; close and archive leave it alone
 gopher checkout move <path> <project>
 gopher checkout list
 ```
@@ -287,8 +288,8 @@ Agents pass `--yes` only after you have approved the plan.
 
 Close is conservative:
 - It runs `git worktree remove` without force, then `git branch -d`.
-- It keeps plain clones, paths listed in `[checkouts] protected`, and checkouts another project
-  also owns.
+- It keeps plain clones, paths listed in `[checkouts] protected`, shared checkouts, and checkouts
+  another project also owns.
 - Uncommitted changes, or commits that are on no remote, block it.
 - An open project window is snapshotted and closed first.
 
@@ -359,7 +360,7 @@ yellow after half an hour without a tick.
 
 `gopher doctor` checks the install and the root in one pass: hooks installed and pointing at a
 real `gopher`, tmux config loaded and Gopher running, the backup, the schedule loop, and
-checkouts that are missing or owned by two projects. It exits non-zero on a problem; `-q` shows
+checkouts that are missing or owned by two projects without being shared. It exits non-zero on a problem; `-q` shows
 only what needs attention.
 
 ## Updating

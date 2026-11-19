@@ -63,6 +63,11 @@ def test_close_plan_classifies_checkouts(config, tmp_path):
     by_path = {c.path: c for c in plan.checkouts}
     assert by_path[main].disposition == "keep" and by_path[main].reason == "protected"
     assert by_path[shared].reason == "also owned by beta"
+    add_checkout(config.projects_dir, "alpha", clone, shared=True)
+    by_path = {c.path: c for c in lifecycle.make_plan(config, "close", "alpha").checkouts}
+    assert by_path[clone].disposition == "keep" and by_path[clone].reason == "shared; left as is"
+    add_checkout(config.projects_dir, "alpha", clone, shared=False)
+    by_path = {c.path: c for c in lifecycle.make_plan(config, "close", "alpha").checkouts}
     assert by_path[clone].disposition == "clean" and "not a git worktree" in by_path[clone].reason
     assert by_path[tmp_path / "gone"].disposition == "skip"
     assert by_path[worktree].disposition == "remove" and by_path[worktree].branch == "feature"

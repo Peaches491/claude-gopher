@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from claude_gopher import restore
-from claude_gopher.checkouts import all_checkouts, read_checkouts
+from claude_gopher.checkouts import all_checkouts, all_shared, read_checkouts
 from claude_gopher.config import Config
 
 ACTIONS = ("archive", "close", "reopen")
@@ -111,6 +111,8 @@ def plan_checkout(config: Config, action: str, project: str, path: Path, pattern
         return CheckoutPlan(path, "skip", "missing")
     if is_protected(path, patterns):
         return CheckoutPlan(path, "keep", "protected")
+    if path in all_shared(config.projects_dir):
+        return CheckoutPlan(path, "keep", "shared; left as is")
     others = sorted({name for name, owned in all_checkouts(config.projects_dir) if owned == path and name != project})
     if others:
         return CheckoutPlan(path, "keep", f"also owned by {', '.join(others)}")

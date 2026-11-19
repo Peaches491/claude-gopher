@@ -121,9 +121,16 @@ project's `checkouts.toml`:
 ```toml
 [[checkout]]
 path = "~/src/monorepo-feature-x"
+
+[[checkout]]
+path = "~/src/infra-config"
+shared = true
 ```
 
-`gopher checkout add|remove|move|list` edit these files. A session's project comes from
+`gopher checkout add|remove|move|list` edit these files. `shared = true` (`gopher checkout add
+--shared`, undone with `--no-shared`) marks a long-lived checkout used across projects: several
+projects may list it without a doctor warning, and archive and close leave it alone (no cleanup
+commands, no removal). A session's project comes from
 `$GOPHER_PROJECT`, else a cwd inside `projects/<p>/`, else the longest owned checkout path
 containing the cwd.
 
@@ -383,9 +390,10 @@ Scripts do the destructive parts; agents and Gopher only propose them. Each comm
 and acts only with `--yes` (agents, after the user agrees) or a typed `yes` at a terminal. An open
 window is snapshotted and closed first.
 
-- **archive**: move to `<archived_dir>`; run `on_archive` in each checkout; keep the checkouts.
-- **close**: move to `<closed_dir>`; for each owned git worktree not owned elsewhere and not
-  `protected`, run `on_close`, `git worktree remove` (never forced), `git branch -d`, then
+- **archive**: move to `<archived_dir>`; run `on_archive` in each checkout that is not shared,
+  protected, or owned elsewhere; keep the checkouts.
+- **close**: move to `<closed_dir>`; for each owned git worktree not owned elsewhere, not shared,
+  and not `protected`, run `on_close`, `git worktree remove` (never forced), `git branch -d`, then
   `on_remove`. Uncommitted changes or commits on no remote block it; plain clones are kept. The
   `close` prompt has the agent check open PRs and offer ticket updates first.
 - **reopen**: move back to `<projects_dir>`; checkouts are not recreated.

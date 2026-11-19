@@ -66,6 +66,9 @@ def test_checkouts_missing_and_shared(config, tmp_path):
     add_checkout(config.projects_dir, "a", tmp_path / "gone")
     messages = [c.message for c in doctor.check_checkouts(config)]
     assert any("does not exist" in m for m in messages) and any("owned by a, b" in m for m in messages)
+    add_checkout(config.projects_dir, "b", shared, shared=True)
+    messages = [c.message for c in doctor.check_checkouts(config)]
+    assert not any("owned by a, b" in m for m in messages)
 
 
 def test_tmux_outside_tmux_warns():

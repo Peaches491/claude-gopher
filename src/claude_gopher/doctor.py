@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from claude_gopher import rootgit, schedule, update
-from claude_gopher.checkouts import all_checkouts
+from claude_gopher.checkouts import all_checkouts, all_shared
 from claude_gopher.config import Config, ConfigError, gopher_proactivity, gopher_save_every_hours, gopher_update_check, tui_actions
 from claude_gopher.hooks import HOOKS, gopher_command, has_hook, is_gopher_hook, read_settings, settings_path
 
@@ -103,8 +103,12 @@ def check_checkouts(config: Config) -> list[Check]:
     for project, path in owned:
         by_path.setdefault(path, []).append(project)
     checks = [Check(WARN, "checkouts", f"{path} (owned by {', '.join(projects)}) does not exist") for path, projects in by_path.items() if not path.exists()]
-    checks += [Check(WARN, "checkouts", f"{path} is owned by {', '.join(projects)}; keep one with gopher checkout move") for path, projects in by_path.items() if len(projects) > 1]
-    return checks or [Check(OK, "checkouts", f"{len(by_path)} checkout(s), each with one owner")]
+    shared = all_shared(config.projects_dir)
+    checks += [
+        Check(WARN, "checkouts", f"{path} is owned by {', '.join(projects)}; keep one with gopher checkout move, or mark it gopher checkout add --shared")
+        for path, projects in by_path.items() if len(projects) > 1 and path not in shared
+    ]
+    return checks or [Check(OK, "checkouts", f"{len(by_path)} checkout(s), each with one owner or shared")]
 
 
 def check_install() -> list[Check]:
