@@ -745,7 +745,7 @@ def test_backup_line_sits_below_the_footer(config, monkeypatch):
     async def steps(app, pilot):
         line = app.query_one("#backup", tui.Static)
         rendered = line.render()
-        assert str(rendered) == "\U0001f4be 10m (+12 -3 ~2)  \U0001f552 off"
+        assert str(rendered) == "\U0001f4be 10m ago (+12 -3 ~2)  \U0001f552 off"
         styles = {str(rendered)[span.start:span.end]: str(span.style) for span in rendered.spans}
         assert (styles["+12"], styles["-3"], styles["~2"]) == ("ansi_green", "ansi_red", "ansi_yellow")
         assert line.region.y > app.query_one(tui.Footer).region.y

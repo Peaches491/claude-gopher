@@ -715,7 +715,7 @@ def heartbeat_compact(config: Config, now: float | None = None) -> tuple[str, bo
         return None
     if not last:
         return f"{HEARTBEAT_ICON} off", False
-    text = f"{HEARTBEAT_ICON} {format_age(now - last)}"
+    text = f"{HEARTBEAT_ICON} {format_age(now - last)} ago"
     rows, _ = listing(config, now)
     upcoming = sorted((row for row in rows if row.next and not row.background), key=lambda row: row.next)
     if upcoming:

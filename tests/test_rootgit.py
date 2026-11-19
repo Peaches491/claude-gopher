@@ -114,8 +114,8 @@ def test_backup_status_flags_a_missing_upstream_or_repo(config, tmp_path):
 
 def test_backup_compact_line():
     status = rootgit.BackupStatus(last_commit=0, changed=0, unpushed=0)
-    assert status.compact(300, 2) == "\U0001f4be 5m \u2713"
+    assert status.compact(300, 2) == "\U0001f4be 5m ago \u2713"
     status = rootgit.BackupStatus(last_commit=0, changed=3, added=9, removed=1, unpushed=2)
-    assert status.compact(5 * 3600, 2) == "\U0001f4be 5h (every 2h) (+9 -1 ~3) \u21e12"
-    assert rootgit.BackupStatus(last_commit=0, unpushed=None).compact(60, 2) == "\U0001f4be 1m \u26a0 no upstream"
+    assert status.compact(5 * 3600, 2) == "\U0001f4be 5h ago (every 2h) (+9 -1 ~3) \u21e12"
+    assert rootgit.BackupStatus(last_commit=0, unpushed=None).compact(60, 2) == "\U0001f4be 1m ago \u26a0 no upstream"
     assert rootgit.BackupStatus(error="no repo").compact(0, 2) == "\U0001f4be no repo"

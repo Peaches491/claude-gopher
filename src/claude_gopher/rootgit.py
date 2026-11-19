@@ -172,7 +172,7 @@ class BackupStatus:
     def segments(self, now: float, every_hours: float) -> list[tuple[str, str | None]]:
         if self.error:
             return [(f"{SAVE_ICON} {self.error}", None)]
-        text = f"{SAVE_ICON} " + (age(now - self.last_commit) if self.last_commit is not None else "never")
+        text = f"{SAVE_ICON} " + (f"{age(now - self.last_commit)} ago" if self.last_commit is not None else "never")
         if self.overdue(now, every_hours):
             text += f" (every {every_hours:g}h)"
         parts = [(text, None)]

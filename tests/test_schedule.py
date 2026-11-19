@@ -258,9 +258,9 @@ def test_heartbeat_compact(config):
     assert schedule.heartbeat_compact(config, now) == ("\U0001f552 off", False)
     write(config, "save", "---\nevery: 2h\nrun: true\n---\n")
     schedule.tick(config, now)
-    assert schedule.heartbeat_compact(config, now + 300) == ("\U0001f552 5m", False)
+    assert schedule.heartbeat_compact(config, now + 300) == ("\U0001f552 5m ago", False)
     write(config, "standup", '---\nat: "11:00"\n---\nStandup.\n')
-    assert schedule.heartbeat_compact(config, now + 300) == ("\U0001f552 5m  \u27a1\ufe0f  standup in 55m", False)
+    assert schedule.heartbeat_compact(config, now + 300) == ("\U0001f552 5m ago  \u27a1\ufe0f  standup in 55m", False)
 
 
 def test_notify_modes_keep_routine_runs_quiet(config):
@@ -364,7 +364,7 @@ def test_background_tasks_stay_off_next(config):
     write(config, "save", "---\nevery: 2h\nrun: true\nbackground: false\n---\n")
     write(config, "cleanup", "---\nevery: 1h\nbackground: true\n---\nTidy.\n")
     schedule.tick(config, now)
-    assert schedule.heartbeat_compact(config, now + 300) == ("\U0001f552 5m  \u27a1\ufe0f  save in 1h 55m", False)
+    assert schedule.heartbeat_compact(config, now + 300) == ("\U0001f552 5m ago  \u27a1\ufe0f  save in 1h 55m", False)
     write(config, "bad", "---\nevery: 1h\nbackground: maybe\n---\n")
     assert "background must be true or false" in schedule.load_tasks(config)[1]["bad"]
 
