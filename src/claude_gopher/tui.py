@@ -41,6 +41,7 @@ from claude_gopher.workon import status_editor_command
 REFRESH_SECONDS = 5
 BACKUP_REFRESH_SECONDS = 60
 BACKUP_STYLES = {"ok": "bright_black", "overdue": "yellow", "error": "red"}
+CHANGE_STYLES = {"added": "green", "removed": "red", "changed": "yellow"}
 RELOAD_CHECK_SECONDS = 2
 RELOAD_ENV = "GOPHER_TUI_RELOADS"
 DETAIL_TIMEOUT = 90
@@ -736,6 +737,7 @@ class GopherTUI(App):
     #projects { height: 1fr; }
     #bottom { dock: bottom; height: auto; }
     #bottom Footer { dock: none; }
+    #bottom-rule { margin: 0; color: ansi_bright_black; }
     #backup { height: 1; padding: 0 1; }
     ListItem.card { height: 5; margin-bottom: 1; padding: 0 1; border-left: thick ansi_bright_black; }
     ListItem.card.compact { height: 2; }
@@ -875,6 +877,7 @@ class GopherTUI(App):
         yield Input(placeholder="/ filter projects: letters in order, or a glob", id="search")
         with Vertical(id="bottom"):
             yield Footer()
+            yield Rule(id="bottom-rule")
             yield Static(id="backup")
 
     def on_mount(self) -> None:
@@ -996,7 +999,10 @@ class GopherTUI(App):
         if not self.backup:
             return
         now = time.time()
-        line = Text(self.backup.compact(now, self.save_hours), style=BACKUP_STYLES[self.backup.level(now, self.save_hours)])
+        base = BACKUP_STYLES[self.backup.level(now, self.save_hours)]
+        line = Text()
+        for text, kind in self.backup.segments(now, self.save_hours):
+            line.append(text, style=CHANGE_STYLES.get(kind, base))
         if self.heartbeat:
             text, stalled = self.heartbeat
             line.append("  ")

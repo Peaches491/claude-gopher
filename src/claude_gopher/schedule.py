@@ -67,6 +67,7 @@ class Default:
     body: str
     purpose: str
 
+BUILTIN_TASKS = ("save", "update-check")
 
 def timing_lines(when: str) -> list[str]:
     every = at = days = None
@@ -534,7 +535,7 @@ def heartbeat_summary(config: Config, now: float | None = None) -> tuple[str, bo
     return text, now - last > HEARTBEAT_STALE_SECONDS
 
 
-HEARTBEAT_ICON, NEXT_ICON = "\U0001f493", "\u23ed"
+HEARTBEAT_ICON, NEXT_ICON = "\U0001f552", "\u27a1\ufe0f"
 
 
 def heartbeat_compact(config: Config, now: float | None = None) -> tuple[str, bool] | None:
@@ -546,10 +547,10 @@ def heartbeat_compact(config: Config, now: float | None = None) -> tuple[str, bo
         return f"{HEARTBEAT_ICON} off", False
     text = f"{HEARTBEAT_ICON} {format_age(now - last)}"
     rows, _ = listing(config, now)
-    upcoming = sorted((row for row in rows if row.next), key=lambda row: row.next)
+    upcoming = sorted((row for row in rows if row.next and row.name not in BUILTIN_TASKS), key=lambda row: row.next)
     if upcoming:
         first = upcoming[0]
-        text += f"  {NEXT_ICON} {first.name} " + ("now" if first.next <= now else format_seconds(first.next - now))
+        text += f"  {NEXT_ICON}  {first.name} " + ("now" if first.next <= now else f"in {format_seconds(first.next - now)}")
     return text, now - last > HEARTBEAT_STALE_SECONDS
 
 

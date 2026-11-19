@@ -169,21 +169,28 @@ class BackupStatus:
             return "error"
         return "overdue" if self.overdue(now, every_hours) else "ok"
 
-    def compact(self, now: float, every_hours: float) -> str:
+    def segments(self, now: float, every_hours: float) -> list[tuple[str, str | None]]:
         if self.error:
-            return f"{SAVE_ICON} {self.error}"
-        parts = [SAVE_ICON, age(now - self.last_commit) if self.last_commit is not None else "never"]
+            return [(f"{SAVE_ICON} {self.error}", None)]
+        text = f"{SAVE_ICON} " + (age(now - self.last_commit) if self.last_commit is not None else "never")
         if self.overdue(now, every_hours):
-            parts.append(f"(every {every_hours:g}h)")
+            text += f" (every {every_hours:g}h)"
+        parts = [(text, None)]
         if self.changed:
-            parts.append(self.counts())
+            parts += [
+                (" (", None), (f"+{self.added}", "added"), (" ", None), (f"-{self.removed}", "removed"),
+                (" ", None), (f"~{self.changed}", "changed"), (")", None),
+            ]
         if self.unpushed is None:
-            parts.append(f"{WARN_ICON} no upstream")
+            parts.append((f" {WARN_ICON} no upstream", None))
         elif self.unpushed:
-            parts.append(f"{UNPUSHED_ICON}{self.unpushed}")
+            parts.append((f" {UNPUSHED_ICON}{self.unpushed}", None))
         elif not self.changed:
-            parts.append(CLEAN_ICON)
-        return " ".join(parts)
+            parts.append((f" {CLEAN_ICON}", None))
+        return parts
+
+    def compact(self, now: float, every_hours: float) -> str:
+        return "".join(text for text, _ in self.segments(now, every_hours))
 
     def describe(self, now: float, every_hours: float) -> str:
         if self.error:

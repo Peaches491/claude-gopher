@@ -235,7 +235,9 @@ def test_new_root_with_chosen_schedule_commits_it(tmp_path, monkeypatch):
 
 def test_heartbeat_compact(config):
     now = at("2026-11-18T10:00:00")
-    assert schedule.heartbeat_compact(config, now) == ("\U0001f493 off", False)
+    assert schedule.heartbeat_compact(config, now) == ("\U0001f552 off", False)
     write(config, "save", "---\nevery: 2h\nrun: true\n---\n")
     schedule.tick(config, now)
-    assert schedule.heartbeat_compact(config, now + 300) == ("\U0001f493 5m  \u23ed save 1h 55m", False)
+    assert schedule.heartbeat_compact(config, now + 300) == ("\U0001f552 5m", False)
+    write(config, "standup", '---\nat: "11:00"\n---\nStandup.\n')
+    assert schedule.heartbeat_compact(config, now + 300) == ("\U0001f552 5m  \u27a1\ufe0f  standup in 55m", False)

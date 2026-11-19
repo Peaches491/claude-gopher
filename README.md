@@ -318,10 +318,11 @@ files, then pushes. `--no-push` skips the push; `--dry-run` previews. The `save`
 runs it every two hours by default; Gopher also runs it at the end-of-day wrap and when you ask.
 The root needs to be a git repository with an upstream to push to.
 
-The bottom line of every sidebar shows the backup and the heartbeat, e.g.
-`💾 39m +35 -23 ~6  💓 3m  ⏭ save 1h 21m`: time since the last save, unsaved lines added and
-removed and files changed (✓ when clean, ⇡ for unpushed commits), then the last schedule tick
-and the next task due. The backup turns yellow when changes have waited longer than the save
+The bottom line of every sidebar shows the backup and the schedule, e.g.
+`💾 39m (+35 -23 ~6)  🕒 3m  ➡️  standup in 1h 21m`: time since the last save, unsaved lines
+added, removed, and files changed in green, red, and yellow (✓ when clean, ⇡ for unpushed
+commits), then the last schedule tick and the next of your own tasks (gopher's built-in save and
+update check stay out of it). The backup turns yellow when changes have waited longer than the save
 task's interval (plus half an hour) without a save, and red when the root is not a git
 repository or has no upstream.
 
