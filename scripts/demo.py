@@ -181,6 +181,8 @@ def clean_svg(svg: str) -> str:
 
 
 def make_app(config, sessions, pinned):
+    tui.doctor.run = lambda config, now=None: []
+    tui.gopher_state = lambda config: "idle"
     app = tui.GopherTUI(config, pinned=pinned)
     app.start_dev_reload = lambda: None
     for spec in PROJECTS:

@@ -217,6 +217,7 @@ is a full-width dashboard.
 | `r` | one-line Haiku summary |
 | `x` | mark finished work seen |
 | `P` | cycle Gopher's proactivity |
+| `D` | dismiss the problems shown under the bottom line |
 | `.` | More for the highlighted project: `c` close its window, `A` archive, `X` close |
 | `q` | quit the sidebar |
 
@@ -320,12 +321,18 @@ runs it every two hours by default; Gopher also runs it at the end-of-day wrap a
 The root needs to be a git repository with an upstream to push to.
 
 The bottom line of every sidebar shows the backup and the schedule, e.g.
-`💾 39m (+35 -23 ~6)  🕒 3m  ➡️  standup in 1h 21m`: time since the last save, unsaved lines
+`💾 39m ago (+35 -23 ~6)  🕒 3m ago  ➡️  standup in 1h 21m`: time since the last save, unsaved lines
 added, removed, and files changed in green, red, and yellow (✓ when clean, ⇡ for unpushed
 commits), then the last schedule tick and the next task due (tasks marked `background: true`,
-such as gopher's own save and update check, stay out of it). The backup turns yellow when changes have waited longer than the save
-task's interval (plus half an hour) without a save, and red when the root is not a git
-repository or has no upstream.
+such as gopher's own save and update check, stay out of it). The backup turns yellow when
+changes have waited longer than the save task's interval (plus half an hour) without a save, and
+red when the root is not a git repository or has no upstream.
+
+Below it, `gopher ○ idle` shows Gopher's own state (working, needs input, needs login, or not
+running), followed by any warnings and problems from `gopher doctor`, refreshed every minute: a
+schedule task that failed, with the last line of its output (an expired login, say), the schedule
+loop down, Gopher needing a login, backup errors. A problem clears when the doctor stops seeing
+it; `D` dismisses the ones shown until they change.
 
 ## The schedule
 
@@ -334,7 +341,7 @@ so you can read, edit, and version it like the rest of the root, or ask Gopher t
 
 ```markdown
 ---
-every: 10m            # or at: "08:45"; optional days: weekdays, until: 2026-12-01
+every: 10m            # or at: "08:45"; optional days: weekdays, hours: 8-18, until: 2026-12-01
 ---
 Read the release thread and route any bug reports to the api-v2-migration inbox.
 ```
@@ -349,7 +356,9 @@ The schedule runs outside Claude: `gopher launch` starts `gopher schedule run` i
 of the gopher tmux session, which ticks every ten minutes, runs what is due, and reports events
 (the backup running overdue; at the `proactive` level, projects whose STATUS has not moved in five
 working days). Routine runs stay silent: `notify: failure` (the default for `save`) speaks only
-when the command fails, and `notify: change` (for `update-check`) only when its answer changes.
+when the command fails, `notify: change` (for `update-check`) only when its answer changes, and
+`notify: output` only when the command prints something, which suits monitors that print what
+they found.
 `background: true` (the default for both) keeps a housekeeping task off the sidebar's "next".
 When a tick has something for Gopher, the loop types one line into Gopher's pane once Gopher is
 idle with an empty input line, or attaches it to your next message to Gopher. `gopher schedule`
@@ -359,7 +368,8 @@ yellow after half an hour without a tick.
 ## Health check
 
 `gopher doctor` checks the install and the root in one pass: hooks installed and pointing at a
-real `gopher`, tmux config loaded and Gopher running, the backup, the schedule loop, and
+real `gopher`, a newer release found by the nightly update check, tmux config loaded and Gopher
+running, the backup, the schedule loop, and
 checkouts that are missing or owned by two projects without being shared. It exits non-zero on a problem; `-q` shows
 only what needs attention.
 

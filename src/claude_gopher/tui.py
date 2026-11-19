@@ -23,18 +23,18 @@ from claude_gopher.config import (
     DEFAULT_IDLE_SECONDS, DEFAULT_SEEN_DWELL_SECONDS, DEFAULT_SUMMARY_LINES, PROACTIVITY_LEVELS, Config, ConfigError, CustomAction, gopher_proactivity, load_config,
     idle_seconds, seen_dwell_seconds, set_gopher_setting, sidebar_summary_lines, tui_actions,
 )
-from claude_gopher import devreload, lifecycle, popup, restore, schedule
+from claude_gopher import devreload, doctor, lifecycle, popup, restore, schedule
 from claude_gopher.checkouts import read_checkouts
 from claude_gopher.inbox import add_item, mark_read, unread
 from claude_gopher.launch import write_prompt
 from claude_gopher.overview import (
-    CREDS, DONE, Acks, Resource, effective_state, most_urgent, open_tickets, project_overview,
+    CREDS, DONE, Acks, Resource, current_sessions, effective_state, most_urgent, open_tickets, project_overview,
     visible_prs,
 )
 from claude_gopher.projects import read_frontmatter, write_priority
 from claude_gopher.prompt import assemble
 from claude_gopher.registry import BACKGROUND
-from claude_gopher.rootgit import BackupStatus, backup_status
+from claude_gopher.rootgit import WARN_ICON, BackupStatus, backup_status
 from claude_gopher.state import IDLE, LEADING_GLYPHS, WAITING, WORKING, resolve_project
 from claude_gopher.workon import status_editor_command
 
@@ -78,6 +78,33 @@ def updated_age(updated: str | None, today: datetime.date | None = None) -> str:
 
 def state_text(state: str) -> Text:
     return Text().append(f"{STATE_ICON.get(state, '?')} {STATE_LABEL.get(state, state)}", style=STATE_STYLE.get(state, ""))
+
+
+HEALTH_LINES = 3
+HEALTH_STYLE = {"fail": "red", "warn": "yellow"}
+
+
+def gopher_state(config: Config) -> str | None:
+    pane = schedule.gopher_pane()
+    if not pane:
+        return None
+    session = next((s for s in current_sessions(config, prune=False) if s.get("pane") == pane), None)
+    if not session:
+        return None
+    return CREDS if session.get("blocked_creds") else session.get("state")
+
+
+def health_text(state: str | None, problems: list, width: int) -> Text:
+    text = Text("gopher ", style="bright_black")
+    text.append_text(state_text(state) if state else Text("not running", style="red"))
+    shown = problems if len(problems) <= HEALTH_LINES else problems[:HEALTH_LINES - 1]
+    for check in shown:
+        line = Text(f"{WARN_ICON} {check.area}: {check.message}", style=HEALTH_STYLE.get(check.level, "yellow"))
+        line.truncate(width, overflow="ellipsis")
+        text.append("\n").append_text(line)
+    if len(shown) < len(problems):
+        text.append(f"\n+{len(problems) - len(shown)} more: gopher doctor (D dismisses)", style="yellow")
+    return text
 
 
 def agents_text(sessions: list[dict]) -> Text:
@@ -739,6 +766,7 @@ class GopherTUI(App):
     #bottom Footer { dock: none; }
     #bottom-rule { margin: 0; color: ansi_bright_black; }
     #backup { height: 1; padding: 0 1; }
+    #health { height: auto; padding: 0 1; }
     ListItem.card { height: 5; margin-bottom: 1; padding: 0 1; border-left: thick ansi_bright_black; }
     ListItem.card.compact { height: 2; }
     ListItem.card.pstate-active { border-left: thick ansi_green; }
@@ -806,6 +834,7 @@ class GopherTUI(App):
         Binding("u", "refresh_status", "Refresh", show=False),
         Binding("e", "edit_human", "Human", show=False),
         Binding("P", "proactivity", "Proactivity", show=False),
+        Binding("D", "dismiss_problems", "Dismiss problems", show=False),
         Binding("ctrl+r", "refresh", "Refresh", show=False),
         Binding("q", "quit", "Quit"),
         Binding("full_stop", "more", "More", show=False),
@@ -838,6 +867,8 @@ class GopherTUI(App):
         self.reloading = False
         self.backup: BackupStatus | None = None
         self.heartbeat: tuple[str, bool] | None = None
+        self.health: list[doctor.Check] = []
+        self.gopher_state: str | None = None
         self.save_hours: float = 0
         self.backup_checked = 0.0
         self.action_problems: list[str] = []
@@ -879,6 +910,7 @@ class GopherTUI(App):
             yield Footer()
             yield Rule(id="bottom-rule")
             yield Static(id="backup")
+            yield Static(id="health")
 
     def on_mount(self) -> None:
         for problem in self.action_problems:
@@ -965,7 +997,9 @@ class GopherTUI(App):
         if now - self.backup_checked >= BACKUP_REFRESH_SECONDS:
             self.backup, self.backup_checked = backup_status(self.config.root), now
             self.save_hours = schedule.save_interval_hours(self.config)
+            self.health = doctor.undismissed(self.config, doctor.run(self.config, now=now))
         self.heartbeat = schedule.heartbeat_compact(self.config, now)
+        self.gopher_state = gopher_state(self.config)
         self.call_from_thread(self.show, projects)
 
     async def show(self, projects: list[dict]) -> None:
@@ -1009,6 +1043,16 @@ class GopherTUI(App):
             line.append(text, style="yellow" if stalled else "bright_black")
         line.truncate(max(self.size.width - 2, 1), overflow="ellipsis")
         self.query_one("#backup", Static).update(line)
+        self.query_one("#health", Static).update(health_text(self.gopher_state, self.health, max(self.size.width - 2, 1)))
+
+    def action_dismiss_problems(self) -> None:
+        if not self.health:
+            self.notify("no problems to dismiss")
+            return
+        count = doctor.dismiss(self.config, self.health)
+        self.health = []
+        self.show_backup()
+        self.notify(f"dismissed {count} problem(s); they come back if they change")
 
     def show_pinned(self) -> None:
         project = self.pinned_project()

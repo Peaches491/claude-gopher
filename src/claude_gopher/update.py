@@ -2,6 +2,7 @@ import json
 import re
 import shutil
 import subprocess
+import tomllib
 from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
@@ -11,6 +12,7 @@ from claude_gopher.config import Config
 PACKAGE = "claude-gopher"
 DEFAULT_SOURCE = "https://github.com/Peaches491/claude-gopher"
 RELEASE_TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+AVAILABLE = re.compile(r"v(\d+\.\d+\.\d+) is available")
 LS_REMOTE_TIMEOUT = 30
 INSTALL_TIMEOUT = 600
 AFTER_UPDATE = [
@@ -53,8 +55,21 @@ def version_key(version: str) -> tuple[int, ...]:
     return tuple(int(part) for part in re.findall(r"\d+", version)[:3])
 
 
+def checkout_version(directory: Path) -> str | None:
+    try:
+        return tomllib.loads((directory / "pyproject.toml").read_text())["project"]["version"]
+    except (OSError, ValueError, KeyError):
+        return None
+
+
 def installed_version() -> str:
-    return metadata.version(PACKAGE)
+    directory = editable_dir()
+    return (directory and checkout_version(directory)) or metadata.version(PACKAGE)
+
+
+def reported_latest(output: str) -> str | None:
+    match = AVAILABLE.search(output)
+    return match.group(1) if match else None
 
 
 def editable_dir() -> Path | None:

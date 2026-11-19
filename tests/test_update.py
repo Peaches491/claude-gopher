@@ -94,3 +94,9 @@ def test_shell_init_tmux_points_at_the_packaged_config(capsys):
     assert cli.main(["shell-init", "tmux", "--path"]) == 0
     path = capsys.readouterr().out.strip()
     assert path.endswith("claude_gopher/shell/tmux.conf") and "prefix g" in open(path).read()
+
+
+def test_editable_installs_report_the_checkout_version(monkeypatch, tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "claude-gopher"\nversion = "0.4.2"\n')
+    monkeypatch.setattr(update, "editable_dir", lambda: tmp_path)
+    assert update.installed_version() == "0.4.2"

@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import subprocess
@@ -9,6 +10,7 @@ from claude_gopher import rootgit, schedule, update
 from claude_gopher.checkouts import all_checkouts, all_shared
 from claude_gopher.config import Config, ConfigError, gopher_proactivity, gopher_save_every_hours, gopher_update_check, tui_actions
 from claude_gopher.hooks import HOOKS, gopher_command, has_hook, is_gopher_hook, read_settings, settings_path
+from claude_gopher.overview import current_sessions
 
 OK, WARN, FAIL = "ok", "warn", "fail"
 
@@ -18,6 +20,10 @@ class Check:
     level: str
     area: str
     message: str
+
+    @property
+    def key(self) -> str:
+        return f"{self.area}: {self.message}"
 
 
 def tmux(*argv: str) -> subprocess.CompletedProcess:
@@ -88,13 +94,43 @@ def check_schedule(config: Config, now: float) -> list[Check]:
         return [Check(WARN, "schedule", f"no {config.schedule_dir}; Gopher's first heartbeat creates it")]
     rows, problems = schedule.listing(config, now)
     checks = [Check(FAIL, "schedule", f"schedule/{name}.md: {problem}") for name, problem in problems.items()]
-    checks += [Check(WARN, "schedule", f"{row.name} last exited {row.note.split()[-1]}") for row in rows if "last exit" in row.note]
+    entries = schedule.load_state(config).get("tasks", {})
+    for row in rows:
+        entry = entries.get(row.name, {})
+        if entry.get("exit"):
+            lines = [line for line in (entry.get("output") or "").splitlines() if line.strip()]
+            checks.append(Check(WARN, "schedule", f"{row.name} failed (exit {entry['exit']})" + (f": {lines[-1].strip()}" if lines else "")))
     last = schedule.load_state(config).get("last_tick")
     if not last:
         checks.append(Check(WARN, "heartbeat", "no tick yet; gopher launch starts the background schedule loop"))
     elif now - last > schedule.HEARTBEAT_STALE_SECONDS:
         checks.append(Check(WARN, "heartbeat", f"last tick {schedule.format_age(now - last)} ago; restart the loop with gopher launch --restart --continue"))
     return checks or [Check(OK, "schedule", f"{len(rows)} task(s); heartbeat {schedule.format_age(now - last)} ago")]
+
+
+def check_update(config: Config, now: float) -> list[Check]:
+    entry = schedule.load_state(config).get("tasks", {}).get("update-check", {})
+    if not entry.get("last") or entry.get("exit"):
+        return []
+    checked = f"checked {schedule.format_age(now - entry['last'])} ago"
+    try:
+        installed = update.installed_version()
+    except Exception:
+        return []
+    latest = update.reported_latest(entry.get("output") or "")
+    if latest and update.version_key(latest) > update.version_key(installed):
+        how = "git pull in your checkout" if update.editable_dir() else "gopher update"
+        return [Check(WARN, "update", f"v{latest} is available (installed {installed}); {how}")]
+    return [Check(OK, "update", f"{installed} is current ({checked})")]
+
+
+def check_gopher_login(config: Config) -> list[Check]:
+    pane = schedule.gopher_pane()
+    if not pane:
+        return []
+    if any(s.get("pane") == pane and s.get("blocked_creds") for s in current_sessions(config, prune=False)):
+        return [Check(WARN, "gopher", "Gopher needs a login renewed; see its pane")]
+    return []
 
 
 def check_checkouts(config: Config) -> list[Check]:
@@ -124,6 +160,40 @@ def run(config: Config, env: dict | None = None, now: float | None = None, setti
     env = dict(os.environ) if env is None else env
     now = now or time.time()
     return [
-        *check_install(), *check_config(config), *check_hooks(settings or settings_path()), *check_tmux(env),
-        *check_backup(config, now), *check_schedule(config, now), *check_checkouts(config),
+        *check_install(), *check_update(config, now), *check_config(config), *check_hooks(settings or settings_path()), *check_tmux(env),
+        *check_gopher_login(config), *check_backup(config, now), *check_schedule(config, now), *check_checkouts(config),
     ]
+
+
+def problems(checks: list[Check]) -> list[Check]:
+    return [check for check in checks if check.level != OK]
+
+
+def dismissed_path(config: Config) -> Path:
+    return config.state_dir / "doctor-dismissed.json"
+
+
+def load_dismissed(config: Config) -> set[str]:
+    try:
+        return set(json.loads(dismissed_path(config).read_text()))
+    except (OSError, ValueError, TypeError):
+        return set()
+
+
+def save_dismissed(config: Config, keys: set[str]) -> None:
+    config.state_dir.mkdir(parents=True, exist_ok=True)
+    dismissed_path(config).write_text(json.dumps(sorted(keys)))
+
+
+def undismissed(config: Config, checks: list[Check]) -> list[Check]:
+    current = {check.key for check in problems(checks)}
+    dismissed = load_dismissed(config)
+    if dismissed - current:
+        save_dismissed(config, dismissed & current)
+    return [check for check in problems(checks) if check.key not in dismissed]
+
+
+def dismiss(config: Config, checks: list[Check]) -> int:
+    keys = {check.key for check in problems(checks)}
+    save_dismissed(config, load_dismissed(config) | keys)
+    return len(keys)

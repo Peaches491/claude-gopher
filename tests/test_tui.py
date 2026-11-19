@@ -751,3 +751,35 @@ def test_backup_line_sits_below_the_footer(config, monkeypatch):
         assert line.region.y > app.query_one(tui.Footer).region.y
 
     drive_app(app, steps)
+
+
+def test_health_lines_show_gopher_state_and_doctor_problems(config, monkeypatch):
+    monkeypatch.setattr(tui, "project_overview", lambda config: [project("alpha")])
+    monkeypatch.setattr(tui, "backup_status", lambda root: tui.BackupStatus(last_commit=time.time() - 600, unpushed=0))
+    monkeypatch.setattr(tui, "gopher_state", lambda config: tui.CREDS)
+    problems = [tui.doctor.Check(tui.doctor.WARN, "schedule", "meeting-notes failed (exit 1): login expired")]
+    monkeypatch.setattr(tui.doctor, "run", lambda config, now=None: list(problems))
+    stub_tmux(monkeypatch)
+    app = tui.GopherTUI(config)
+
+    async def steps(app, pilot):
+        health = app.query_one("#health", tui.Static)
+        assert str(health.render()).splitlines() == [
+            "gopher \u2715 needs login", "\u26a0 schedule: meeting-notes failed (exit 1): login expired",
+        ]
+        assert health.region.y > app.query_one("#backup", tui.Static).region.y
+        await pilot.press("D")
+        assert str(health.render()) == "gopher \u2715 needs login"
+        assert tui.doctor.undismissed(config, problems) == []
+        problems[0] = tui.doctor.Check(tui.doctor.WARN, "schedule", "meeting-notes failed (exit 1): other")
+        assert len(tui.doctor.undismissed(config, problems)) == 1
+
+    drive_app(app, steps)
+
+
+def test_health_text_caps_the_problem_lines():
+    checks = [tui.doctor.Check(tui.doctor.FAIL, "hooks", f"problem {n}") for n in range(5)]
+    lines = str(tui.health_text(tui.IDLE, checks, 80)).splitlines()
+    assert lines[0] == "gopher \u25cb idle" and len(lines) == 4
+    assert lines[-1] == "+3 more: gopher doctor (D dismisses)"
+    assert str(tui.health_text(None, [], 80)) == "gopher not running"

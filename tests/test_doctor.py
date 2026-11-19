@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from claude_gopher import doctor
+from claude_gopher import doctor, schedule
 from claude_gopher.cli import main
 from claude_gopher.checkouts import add_checkout
 from claude_gopher.config import load_config
@@ -80,3 +80,22 @@ def test_cli_exit_code(config, monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(doctor, "settings_path", lambda: tmp_path / "none.json")
     assert main(["doctor", "-q"]) == 1
     assert "fail  hooks" in capsys.readouterr().out
+
+
+def test_failed_task_shows_its_last_output_line(config):
+    config.schedule_dir.mkdir(exist_ok=True)
+    (config.schedule_dir / "watch.md").write_text("---\nevery: 1h\nrun: echo starting; echo login expired >&2; exit 1\nnotify: output\n---\nx\n")
+    schedule.tick(config, 1e9)
+    messages = [c.message for c in doctor.check_schedule(config, 1e9)]
+    assert "watch failed (exit 1): login expired" in messages
+
+
+def test_update_check_result_shows_in_doctor(config, monkeypatch):
+    now = 1_800_000_000.0
+    output = "claude-gopher v0.2.0 is available (installed 0.1.0); release notes: x"
+    schedule.save_state(config, {"tasks": {"update-check": {"last": now - 3600, "exit": 0, "output": output}}})
+    monkeypatch.setattr(doctor.update, "editable_dir", lambda: None)
+    monkeypatch.setattr(doctor.update, "installed_version", lambda: "0.1.0")
+    assert [c.message for c in doctor.check_update(config, now)] == ["v0.2.0 is available (installed 0.1.0); gopher update"]
+    monkeypatch.setattr(doctor.update, "installed_version", lambda: "0.2.0")
+    assert [(c.level, c.message) for c in doctor.check_update(config, now)] == [(doctor.OK, "0.2.0 is current (checked 1h ago)")]

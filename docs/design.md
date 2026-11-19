@@ -287,13 +287,15 @@ nothing is lost when Gopher restarts (a Claude Code cron job would show every ti
 die with the session, and expire after 7 days):
 
 - `schedule/<task>.md`: frontmatter `every` (`10m`, `2h`, `1d`) or `at` (`HH:MM`, local, daily),
-  optional `days` (`weekdays`, `weekends`, `mon,thu`), `run` (a shell command), `until` (last
+  optional `days` (`weekdays`, `weekends`, `mon,thu`), `hours` (`8-18`, `08:30-17:00`; `every` tasks
+  only), `run` (a shell command), `until` (last
   date), `enabled`, `notify` (`always`, the default; `failure`: only when `run` fails; `change`:
-  only when its output differs from the previous run), `background` (`true` keeps it off the
-  sidebar's "next"); the body tells Gopher what to do with the result. Defaults: `save` (every
-  `save_every_hours`, runs `gopher save`, `notify: failure`) and `update-check` (00:03, runs
-  `gopher update --check`, `notify: change`), both `background: true`; those two names keep
-  their `notify` and `background` defaults when a file omits the fields.
+  only when its output differs from the previous run, the first run counting as a change; `output`: only when it prints something),
+  `background` (`true` keeps it off the sidebar's "next"); the body tells Gopher what to do with
+  the result. Defaults: `save` (every `save_every_hours`, runs `gopher save`, `notify: failure`)
+  and `update-check` (00:03, runs `gopher update --check`, `notify: change`), both
+  `background: true`; those two names keep their `notify` and `background` defaults when a file
+  omits the fields.
 - `gopher schedule tick` (under a lock) runs each due task's command in the root, records runs in
   `<state_dir>/schedule.json`, and prints a section per due task: output, then instructions. It
   adds events: the backup newly overdue, and at the proactive level projects whose STATUS has
@@ -355,6 +357,7 @@ seconds.
 | `r` | refresh the project's Haiku line |
 | `+` / `-` | raise or lower priority |
 | `P` | cycle Gopher's proactivity |
+| `D` | dismiss the doctor problems shown at the bottom (until they change) |
 | `.` | More: close the window (or this tab), archive, close the project |
 | `Q`, `q` | close this tab; quit |
 | `ctrl+r` | refresh now |
@@ -415,7 +418,14 @@ problem: the config parses and the state dir exists; every gopher hook is in
 `~/.claude/settings.json` and points at an existing binary; tmux is running with gopher's config
 loaded and the Gopher session up; the backup (repository, upstream, overdue); the schedule
 (malformed tasks, failing commands), the schedule loop and its last tick; checkouts that are
-missing, or owned twice without being shared. `-q` prints only warnings and problems.
+missing, or owned twice without being shared; Gopher marked as needing login; a newer release in
+the last update check, compared with the version installed now (an editable install reports its
+checkout's `pyproject.toml` version). A failed schedule task shows the last line of its output. `-q` prints only warnings and problems.
+
+The sidebar runs the same checks every minute and shows Gopher's state plus each warning and
+problem under its bottom line (up to three lines, then a count). `D` dismisses the problems shown;
+dismissals live in `<state_dir>/doctor-dismissed.json`, keyed by area and message, and are
+dropped once that exact problem is gone, so a changed or recurring problem shows again.
 
 `gopher doctor --report TITLE [--description TEXT]` turns the results into a bug report for the
 project's GitHub issues: what happened, the environment (gopher, Claude Code, tmux, Python, OS),
