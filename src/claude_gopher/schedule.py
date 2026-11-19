@@ -19,7 +19,7 @@ UNIT_SECONDS = {"m": 60, "h": 3600, "d": 86400}
 CLOCK = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 DAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 DAY_SETS = {"daily": DAY_NAMES, "weekdays": DAY_NAMES[:5], "weekends": DAY_NAMES[5:]}
-KNOWN_FIELDS = {"every", "at", "days", "run", "until", "enabled", "notify"}
+KNOWN_FIELDS = {"every", "at", "days", "run", "until", "enabled", "notify", "background"}
 NOTIFY_MODES = ("always", "failure", "change")
 RUN_TIMEOUT = 600
 OUTPUT_LINES = 40
@@ -50,6 +50,8 @@ Frontmatter fields:
 - `until: YYYY-MM-DD`: last day to run; afterwards the tick reports it once so Gopher can remove it.
 - `notify: failure` / `notify: change`: tell Gopher only when `run` fails, or when its output
   differs from the previous run (default `always`).
+- `background: true`: housekeeping; keep it off the sidebar's "next" (gopher's own `save` and
+  `update-check` default to this).
 - `enabled: false`: keep the file but skip it.
 
 The body is plain instructions for Gopher. A task without `run` is just a reminder: Gopher does
@@ -67,8 +69,10 @@ UPDATE_BODY = (
     "Mention a given version once. Install only when the user says so."
 )
 DEFAULT_UPDATE_AT = "00:03"
-BUILTIN_TASKS = ("save", "update-check")
-BUILTIN_NOTIFY = {"save": "failure", "update-check": "change"}
+BUILTIN_DEFAULTS = {
+    "save": {"notify": "failure", "background": True},
+    "update-check": {"notify": "change", "background": True},
+}
 
 
 @dataclass
@@ -79,6 +83,7 @@ class Default:
     body: str
     purpose: str
     notify: str = "always"
+    background: bool = False
 
 
 def timing_lines(when: str) -> list[str]:
@@ -104,8 +109,9 @@ def timing_lines(when: str) -> list[str]:
     return lines
 
 
-def task_text(when: str, body: str, run: str | None = None, notify: str = "always") -> str:
+def task_text(when: str, body: str, run: str | None = None, notify: str = "always", background: bool = False) -> str:
     extra = ([f"run: {run}"] if run else []) + ([f"notify: {notify}"] if notify != "always" else [])
+    extra += ["background: true"] if background else []
     lines = ["---", *timing_lines(when), *extra, "---", body.strip(), ""]
     return "\n".join(lines)
 
@@ -118,14 +124,14 @@ def defaults(config: Config) -> list[Default]:
         hours, check_updates = 0, False
     tasks = []
     if hours:
-        tasks.append(Default("save", f"{hours}h", "gopher save", SAVE_BODY, "commit and push the root (gopher save)", BUILTIN_NOTIFY["save"]))
+        tasks.append(Default("save", f"{hours}h", "gopher save", SAVE_BODY, "commit and push the root (gopher save)", **BUILTIN_DEFAULTS["save"]))
     if check_updates:
-        tasks.append(Default("update-check", DEFAULT_UPDATE_AT, "gopher update --check", UPDATE_BODY, "check for a new gopher release", BUILTIN_NOTIFY["update-check"]))
+        tasks.append(Default("update-check", DEFAULT_UPDATE_AT, "gopher update --check", UPDATE_BODY, "check for a new gopher release", **BUILTIN_DEFAULTS["update-check"]))
     return tasks
 
 
 def default_files(config: Config) -> dict[str, str]:
-    return {task.name: task_text(task.when, task.body, task.run, task.notify) for task in defaults(config)}
+    return {task.name: task_text(task.when, task.body, task.run, task.notify, task.background) for task in defaults(config)}
 
 
 def interview(config: Config, ask, say) -> dict[str, str]:
@@ -140,7 +146,7 @@ def interview(config: Config, ask, say) -> dict[str, str]:
                 break
             when = task.when if answer.lower() in ("y", "yes", "") else answer
             try:
-                files[task.name] = task_text(when, task.body, task.run, task.notify)
+                files[task.name] = task_text(when, task.body, task.run, task.notify, task.background)
                 break
             except ScheduleError as error:
                 say(str(error))
@@ -179,6 +185,7 @@ class Task:
     until: datetime.date | None = None
     enabled: bool = True
     notify: str = "always"
+    background: bool = False
     body: str = ""
 
     def timing(self) -> str:
@@ -228,17 +235,23 @@ def parse_task(path: Path) -> Task:
             task.until = datetime.date.fromisoformat(fields["until"])
         except ValueError as error:
             raise ScheduleError(f"until must be a date like 2026-12-01, not {fields['until']!r}") from error
-    if "enabled" in fields:
-        if fields["enabled"].lower() not in ("true", "false"):
-            raise ScheduleError(f"enabled must be true or false, not {fields['enabled']!r}")
-        task.enabled = fields["enabled"].lower() == "true"
+    task.enabled = parse_flag(fields, "enabled", True)
+    task.background = parse_flag(fields, "background", BUILTIN_DEFAULTS.get(task.name, {}).get("background", False))
     if "notify" in fields:
         if fields["notify"] not in NOTIFY_MODES:
             raise ScheduleError(f"notify must be one of {', '.join(NOTIFY_MODES)}, not {fields['notify']!r}")
         task.notify = fields["notify"]
-    elif task.name in BUILTIN_NOTIFY:
-        task.notify = BUILTIN_NOTIFY[task.name]
+    else:
+        task.notify = BUILTIN_DEFAULTS.get(task.name, {}).get("notify", "always")
     return task
+
+
+def parse_flag(fields: dict, name: str, default: bool) -> bool:
+    if name not in fields:
+        return default
+    if fields[name].lower() not in ("true", "false"):
+        raise ScheduleError(f"{name} must be true or false, not {fields[name]!r}")
+    return fields[name].lower() == "true"
 
 
 def schedule_dir(config: Config) -> Path:
@@ -611,6 +624,7 @@ class Row:
     next: float | None
     run: str | None
     note: str = ""
+    background: bool = False
 
 
 def listing(config: Config, now: float | None = None) -> tuple[list[Row], dict[str, str]]:
@@ -623,7 +637,7 @@ def listing(config: Config, now: float | None = None) -> tuple[list[Row], dict[s
         note = "disabled" if not task.enabled else f"ended {task.until}" if expired(task, now) else ""
         if entry.get("exit"):
             note = (note + f" last exit {entry['exit']}").strip()
-        rows.append(Row(task.name, task.timing(), entry.get("last"), next_due(task, entry, now), task.run, note))
+        rows.append(Row(task.name, task.timing(), entry.get("last"), next_due(task, entry, now), task.run, note, task.background))
     return rows, problems
 
 
@@ -656,7 +670,7 @@ def heartbeat_compact(config: Config, now: float | None = None) -> tuple[str, bo
         return f"{HEARTBEAT_ICON} off", False
     text = f"{HEARTBEAT_ICON} {format_age(now - last)}"
     rows, _ = listing(config, now)
-    upcoming = sorted((row for row in rows if row.next and row.name not in BUILTIN_TASKS), key=lambda row: row.next)
+    upcoming = sorted((row for row in rows if row.next and not row.background), key=lambda row: row.next)
     if upcoming:
         first = upcoming[0]
         text += f"  {NEXT_ICON}  {first.name} " + ("now" if first.next <= now else f"in {format_seconds(first.next - now)}")

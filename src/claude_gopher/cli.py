@@ -579,12 +579,14 @@ def cmd_schedule_list(args) -> int:
     if not rows and not problems:
         print(f"no tasks in {config.schedule_dir}")
     if rows:
+        table = [(row, when(row.last, now) if row.last else "never", when(row.next, now)) for row in rows]
         width = max(len(row.name) for row in rows)
         timing = max(len(row.timing) for row in rows)
-        print(f"{'TASK':<{width}}  {'WHEN':<{timing}}  {'LAST':<9}  {'NEXT':<9}  RUN")
-        for row in rows:
-            last = when(row.last, now) if row.last else "never"
-            line = f"{row.name:<{width}}  {row.timing:<{timing}}  {last:<9}  {when(row.next, now):<9}  {row.run or '-'}"
+        lasts = max(4, *(len(last) for _, last, _ in table))
+        nexts = max(4, *(len(upcoming) for _, _, upcoming in table))
+        print(f"{'TASK':<{width}}  {'WHEN':<{timing}}  {'LAST':<{lasts}}  {'NEXT':<{nexts}}  RUN")
+        for row, last, upcoming in table:
+            line = f"{row.name:<{width}}  {row.timing:<{timing}}  {last:<{lasts}}  {upcoming:<{nexts}}  {row.run or '-'}"
             print(line + (f"  ({row.note})" if row.note else ""))
     for name, problem in problems.items():
         print(f"{name}: {problem}", file=sys.stderr)

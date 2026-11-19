@@ -282,10 +282,11 @@ die with the session, and expire after 7 days):
 - `schedule/<task>.md`: frontmatter `every` (`10m`, `2h`, `1d`) or `at` (`HH:MM`, local, daily),
   optional `days` (`weekdays`, `weekends`, `mon,thu`), `run` (a shell command), `until` (last
   date), `enabled`, `notify` (`always`, the default; `failure`: only when `run` fails; `change`:
-  only when its output differs from the previous run); the body tells Gopher what to do with the
-  result. Defaults: `save` (every
+  only when its output differs from the previous run), `background` (`true` keeps it off the
+  sidebar's "next"); the body tells Gopher what to do with the result. Defaults: `save` (every
   `save_every_hours`, runs `gopher save`, `notify: failure`) and `update-check` (00:03, runs
-  `gopher update --check`, `notify: change`).
+  `gopher update --check`, `notify: change`), both `background: true`; those two names keep
+  their `notify` and `background` defaults when a file omits the fields.
 - `gopher schedule tick` (under a lock) runs each due task's command in the root, records runs in
   `<state_dir>/schedule.json`, and prints a section per due task: output, then instructions. It
   adds events: the backup newly overdue, and at the proactive level projects whose STATUS has

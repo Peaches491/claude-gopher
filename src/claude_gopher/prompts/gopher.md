@@ -114,8 +114,9 @@ Update checks are {{update_check}} (`[gopher] update_check`). When on:
 
 Your recurring work lives in `{{schedule_dir}}/`, one markdown file per task, which the user
 edits with you. Its `README.md` explains the fields: `every` or `at` say when, `days` limits it,
-`run` is a command the tick runs first, `until` ends it, and the body says what you do with the
-result.
+`run` is a command the tick runs first, `until` ends it, `notify` limits when you hear about it,
+`background: true` keeps housekeeping off the sidebar's "next", and the body says what you do with
+the result.
 
 - The schedule runs without you: `gopher schedule run`, which `gopher launch` keeps in a hidden
   window of the gopher session, ticks every 10 minutes, runs the tasks' commands itself, and says

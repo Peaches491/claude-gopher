@@ -2,7 +2,6 @@ import datetime
 import shlex
 import subprocess
 
-from claude_gopher import schedule
 from claude_gopher.config import Config, gopher_features
 from claude_gopher.prompt import SESSION_CONTEXTS, assemble
 from claude_gopher.workon import SIDEBAR_COMMANDS, Agent, WorkonError, agent_argv, pick_agent, run_lines

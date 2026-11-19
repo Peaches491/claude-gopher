@@ -321,8 +321,8 @@ The root needs to be a git repository with an upstream to push to.
 The bottom line of every sidebar shows the backup and the schedule, e.g.
 `💾 39m (+35 -23 ~6)  🕒 3m  ➡️  standup in 1h 21m`: time since the last save, unsaved lines
 added, removed, and files changed in green, red, and yellow (✓ when clean, ⇡ for unpushed
-commits), then the last schedule tick and the next of your own tasks (gopher's built-in save and
-update check stay out of it). The backup turns yellow when changes have waited longer than the save
+commits), then the last schedule tick and the next task due (tasks marked `background: true`,
+such as gopher's own save and update check, stay out of it). The backup turns yellow when changes have waited longer than the save
 task's interval (plus half an hour) without a save, and red when the root is not a git
 repository or has no upstream.
 
@@ -349,6 +349,7 @@ of the gopher tmux session, which ticks every ten minutes, runs what is due, and
 (the backup running overdue; at the `proactive` level, projects whose STATUS has not moved in five
 working days). Routine runs stay silent: `notify: failure` (the default for `save`) speaks only
 when the command fails, and `notify: change` (for `update-check`) only when its answer changes.
+`background: true` (the default for both) keeps a housekeeping task off the sidebar's "next".
 When a tick has something for Gopher, the loop types one line into Gopher's pane once Gopher is
 idle with an empty input line, or attaches it to your next message to Gopher. `gopher schedule`
 lists the tasks with their last and next runs; the clock on the sidebar's bottom line turns

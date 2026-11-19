@@ -205,7 +205,7 @@ def test_interview_keeps_changes_drops_and_adds(config):
     said = []
     files = schedule.interview(config, ask, said.append)
     assert sorted(files) == ["save", "standup"]
-    assert files["save"].startswith("---\nevery: 4h\nrun: gopher save\nnotify: failure\n---\n")
+    assert files["save"].startswith("---\nevery: 4h\nrun: gopher save\nnotify: failure\nbackground: true\n---\n")
     assert files["standup"] == '---\nat: "09:00"\ndays: weekdays\n---\nRemind me to post the standup.\n'
     assert any("say when" in line for line in said)
     assert said[-1].startswith("Schedule: save, standup.")
@@ -325,5 +325,16 @@ def test_builtin_tasks_without_notify_keep_their_quiet_default(config):
     write(config, "save", "---\nevery: 2h\nrun: gopher save\n---\n")
     write(config, "update-check", '---\nat: "00:03"\nrun: gopher update --check\n---\n')
     write(config, "standup", "---\nevery: 1h\n---\nStandup.\n")
-    tasks = {task.name: task.notify for task in schedule.load_tasks(config)[0]}
-    assert tasks == {"save": "failure", "update-check": "change", "standup": "always"}
+    tasks = {task.name: (task.notify, task.background) for task in schedule.load_tasks(config)[0]}
+    assert tasks == {"save": ("failure", True), "update-check": ("change", True), "standup": ("always", False)}
+
+
+def test_background_tasks_stay_off_next(config):
+    now = at("2026-11-18T10:00:00")
+    (config.schedule_dir / "update-check.md").unlink()
+    write(config, "save", "---\nevery: 2h\nrun: true\nbackground: false\n---\n")
+    write(config, "cleanup", "---\nevery: 1h\nbackground: true\n---\nTidy.\n")
+    schedule.tick(config, now)
+    assert schedule.heartbeat_compact(config, now + 300) == ("\U0001f552 5m  \u27a1\ufe0f  save in 1h 55m", False)
+    write(config, "bad", "---\nevery: 1h\nbackground: maybe\n---\n")
+    assert "background must be true or false" in schedule.load_tasks(config)[1]["bad"]
