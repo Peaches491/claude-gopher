@@ -61,7 +61,7 @@ def test_parse_task_validates_fields(config):
 
 
 def test_every_task_runs_its_command_then_waits(config):
-    write(config, "save", "---\nevery: 2h\nrun: echo saved\n---\nReport it.\n")
+    write(config, "save", "---\nevery: 2h\nrun: echo saved\nnotify: always\n---\nReport it.\n")
     (config.schedule_dir / "update-check.md").unlink()
     now = at("2026-11-18T10:00:00")
     text = schedule.tick(config, now).text()
@@ -109,7 +109,7 @@ def test_disabled_tasks_and_problems_are_reported_once(config):
 
 
 def test_dry_run_records_nothing(config):
-    write(config, "save", "---\nevery: 2h\nrun: echo saved\n---\n")
+    write(config, "save", "---\nevery: 2h\nrun: echo saved\nnotify: always\n---\n")
     now = at("2026-11-18T10:00:00")
     assert "would run: echo saved" in schedule.tick(config, now, dry_run=True).text()
     assert "$ echo saved" in schedule.tick(config, now).text()
@@ -319,3 +319,11 @@ def test_hook_attaches_pending_report_to_gophers_next_prompt(config, monkeypatch
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
     assert main(["hook", "inbox"]) == 0
     assert "gopher schedule report" in capsys.readouterr().out
+
+
+def test_builtin_tasks_without_notify_keep_their_quiet_default(config):
+    write(config, "save", "---\nevery: 2h\nrun: gopher save\n---\n")
+    write(config, "update-check", '---\nat: "00:03"\nrun: gopher update --check\n---\n')
+    write(config, "standup", "---\nevery: 1h\n---\nStandup.\n")
+    tasks = {task.name: task.notify for task in schedule.load_tasks(config)[0]}
+    assert tasks == {"save": "failure", "update-check": "change", "standup": "always"}

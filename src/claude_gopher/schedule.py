@@ -68,6 +68,7 @@ UPDATE_BODY = (
 )
 DEFAULT_UPDATE_AT = "00:03"
 BUILTIN_TASKS = ("save", "update-check")
+BUILTIN_NOTIFY = {"save": "failure", "update-check": "change"}
 
 
 @dataclass
@@ -117,9 +118,9 @@ def defaults(config: Config) -> list[Default]:
         hours, check_updates = 0, False
     tasks = []
     if hours:
-        tasks.append(Default("save", f"{hours}h", "gopher save", SAVE_BODY, "commit and push the root (gopher save)", "failure"))
+        tasks.append(Default("save", f"{hours}h", "gopher save", SAVE_BODY, "commit and push the root (gopher save)", BUILTIN_NOTIFY["save"]))
     if check_updates:
-        tasks.append(Default("update-check", DEFAULT_UPDATE_AT, "gopher update --check", UPDATE_BODY, "check for a new gopher release", "change"))
+        tasks.append(Default("update-check", DEFAULT_UPDATE_AT, "gopher update --check", UPDATE_BODY, "check for a new gopher release", BUILTIN_NOTIFY["update-check"]))
     return tasks
 
 
@@ -235,6 +236,8 @@ def parse_task(path: Path) -> Task:
         if fields["notify"] not in NOTIFY_MODES:
             raise ScheduleError(f"notify must be one of {', '.join(NOTIFY_MODES)}, not {fields['notify']!r}")
         task.notify = fields["notify"]
+    elif task.name in BUILTIN_NOTIFY:
+        task.notify = BUILTIN_NOTIFY[task.name]
     return task
 
 
