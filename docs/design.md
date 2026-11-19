@@ -414,8 +414,16 @@ loop).
 problem: the config parses and the state dir exists; every gopher hook is in
 `~/.claude/settings.json` and points at an existing binary; tmux is running with gopher's config
 loaded and the Gopher session up; the backup (repository, upstream, overdue); the schedule
-(malformed tasks, failing commands), the schedule loop and its last tick; checkouts that are missing or owned twice.
-`-q` prints only warnings and problems.
+(malformed tasks, failing commands), the schedule loop and its last tick; checkouts that are
+missing, or owned twice without being shared. `-q` prints only warnings and problems.
+
+`gopher doctor --report TITLE [--description TEXT]` turns the results into a bug report for the
+project's GitHub issues: what happened, the environment (gopher, Claude Code, tmux, Python, OS),
+and the doctor lines, with the home directory replaced by `~`. It searches existing issues
+(`gh issue list --search`, open and closed) and lists likely duplicates. It posts nothing unless
+told: `--yes` files a new issue, `--comment N` adds the report to issue N, and at a terminal it
+asks. Without `gh` it points at the web form (`.github/ISSUE_TEMPLATE/bug_report.yml`). Gopher's
+prompt has it draft, show the user, and post only on their yes.
 
 ### tmux integration
 

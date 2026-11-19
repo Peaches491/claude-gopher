@@ -1,0 +1,30 @@
+name: Bug report
+description: Something in gopher does not work as described
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        `gopher doctor --report "<title>" --description "<what happened>"` fills this in for you,
+        including the checks below, and searches for an existing issue first.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: "`gopher update --check` (shows the installed version), `claude --version`, `tmux -V`, and your OS."
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: gopher doctor
+      description: Output of `gopher doctor`. Replace anything private, such as paths or project names.
+      render: text

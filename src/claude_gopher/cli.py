@@ -18,7 +18,7 @@ from claude_gopher.prompt import CONTEXTS, assemble, is_gopher_session, session_
 from claude_gopher.roots import RootError, check_name, check_target, create_project, create_root, register_root
 from claude_gopher.overview import current_sessions, project_overview
 from claude_gopher.setup import SetupIO, launch_interview, run_setup
-from claude_gopher import devreload, doctor, launch, lifecycle, popup, rename, restore, rootgit, schedule, update, workon
+from claude_gopher import bugreport, devreload, doctor, launch, lifecycle, popup, rename, restore, rootgit, schedule, update, workon
 from claude_gopher.state import (
     apply_event,
     mark_needs_login,
@@ -720,17 +720,60 @@ def cmd_agents(args) -> int:
     return 0
 
 
+def check_line(check) -> str:
+    return f"{check.level:<4}  {check.area:<9}  {check.message}"
+
+
 def cmd_doctor(args) -> int:
     checks = doctor.run(root_config(args))
+    if args.report:
+        return doctor_report(args, checks)
     for check in checks:
         if args.quiet and check.level == doctor.OK:
             continue
-        print(f"{check.level:<4}  {check.area:<9}  {check.message}")
+        print(check_line(check))
     failed = sum(check.level == doctor.FAIL for check in checks)
     warned = sum(check.level == doctor.WARN for check in checks)
     if not args.quiet or failed or warned:
         print(f"{failed} problem(s), {warned} warning(s)" if failed or warned else "all good")
     return 1 if failed else 0
+
+
+def doctor_report(args, checks) -> int:
+    title = args.report.strip()
+    body = bugreport.draft(title, args.description or "", [check_line(check) for check in checks], bugreport.environment())
+    if args.comment is None:
+        try:
+            matches = bugreport.search(title)
+        except bugreport.BugReportError as error:
+            print(f"could not search existing issues: {error}", file=sys.stderr)
+            matches = []
+    else:
+        matches = []
+    print(f"Title: {title}\n\n{body}")
+    if matches:
+        print("Possible duplicates:")
+        for match in matches:
+            print(f"  #{match.number} [{match.state}] {match.title}  {match.url}")
+        print()
+    if args.comment is not None:
+        print(bugreport.comment(args.comment, body))
+        return 0
+    if args.yes:
+        print(bugreport.file_issue(title, body))
+        return 0
+    if not sys.stdin.isatty():
+        print(f"Nothing posted. This goes to the public issue tracker at {bugreport.REPO}: re-run with --yes to file it,"
+              " or --comment N to add it to an existing issue.")
+        return 0
+    answer = input("File a new issue [n], add to an existing one [its number], or quit [q]? ").strip().lower().lstrip("#")
+    if answer == "n":
+        print(bugreport.file_issue(title, body))
+    elif answer.isdigit():
+        print(bugreport.comment(int(answer), body))
+    else:
+        print("Nothing posted.")
+    return 0
 
 
 def cmd_needs_login(args) -> int:
@@ -977,6 +1020,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor_parser = sub.add_parser("doctor", help="check the install: hooks, tmux config, Gopher, backup, schedule and heartbeat, checkouts")
     doctor_parser.add_argument("-q", "--quiet", action="store_true", help="print only warnings and problems")
+    doctor_parser.add_argument("--report", metavar="TITLE", help="draft a bug report with these results and search existing issues; posts only with --yes or --comment")
+    doctor_parser.add_argument("--description", default="", help="what happened, for --report")
+    doctor_parser.add_argument("--yes", action="store_true", help="with --report: file the issue without asking")
+    doctor_parser.add_argument("--comment", type=int, metavar="N", help="with --report: add the report to existing issue N instead")
     doctor_parser.set_defaults(func=cmd_doctor)
 
     needs_login = sub.add_parser("needs-login", help="mark this agent as blocked on credentials (shows 'needs login'; cleared by the user's next message)")
@@ -1018,7 +1065,7 @@ def main(argv: list[str] | None = None) -> int:
     except subprocess.CalledProcessError as error:
         print(f"gopher: {' '.join(error.cmd)} failed: {(error.stderr or '').strip()}", file=sys.stderr)
         return 1
-    except (ConfigError, RootError, FileNotFoundError, workon.WorkonError) as error:
+    except (ConfigError, RootError, FileNotFoundError, workon.WorkonError, bugreport.BugReportError) as error:
         print(f"gopher: {error}", file=sys.stderr)
         return 1
 

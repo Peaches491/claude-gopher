@@ -363,6 +363,13 @@ real `gopher`, tmux config loaded and Gopher running, the backup, the schedule l
 checkouts that are missing or owned by two projects without being shared. It exits non-zero on a problem; `-q` shows
 only what needs attention.
 
+To report a bug, run `gopher doctor --report "<title>" --description "<what happened>"`. It drafts
+an issue with the doctor results and your versions (your home directory shown as `~`), and lists
+existing issues that look like a match. It posts only with `--yes` (a new issue) or `--comment N`
+(added to issue N), using the GitHub CLI; without `gh`, file it with the
+[bug report form](https://github.com/Peaches491/claude-gopher/issues/new?template=bug_report.yml).
+Ask Gopher to report a problem and it runs the draft and shows it to you before posting.
+
 ## Updating
 
 ```bash

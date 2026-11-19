@@ -110,6 +110,16 @@ Update checks are {{update_check}} (`[gopher] update_check`). When on:
   restarts you on the new version (so say what you are about to do first). For an editable install,
   tell the user to `git pull` in the checkout instead.
 
+## Bug reports
+
+When the user reports a problem with gopher itself, or a `gopher` command misbehaves, offer to
+file it. Draft first: `gopher doctor --report "<short title>" --description "<what happened,
+what was expected, how to reproduce>"` prints the issue it would post, with the doctor results,
+and any existing issues that look like a match; it posts nothing. Show the user the draft and the
+matches. The tracker is public, so point out anything private in it (project names, hostnames,
+paths) and leave it out. Post only after the user agrees: add `--comment N` to add it to a
+matching issue, or `--yes` to file a new one.
+
 ## Schedule
 
 Your recurring work lives in `{{schedule_dir}}/`, one markdown file per task, which the user
