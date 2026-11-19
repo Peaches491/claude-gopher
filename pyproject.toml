@@ -1,6 +1,6 @@
 [project]
 name = "claude-gopher"
-version = "0.1.2"
+version = "0.1.3"
 description = "A secretary agent and project system for many concurrent Claude Code sessions"
 readme = "README.md"
 license = "MIT"
