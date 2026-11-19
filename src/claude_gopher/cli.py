@@ -126,10 +126,14 @@ def cmd_hook_inbox(args) -> int:
     config = None
     try:
         payload = json.load(sys.stdin)
-        config, project, _ = hook_session(payload)
+        config, project, gopher = hook_session(payload)
+        event = payload.get("hook_event_name")
+        if config is not None and gopher:
+            if event == "UserPromptSubmit" and schedule.report_path(config).is_file():
+                emit(event, f"{schedule.NOTIFY_TEXT} (It is waiting from the background schedule; handle it after the user's request.)")
+            return 0
         if config is None or not project or not (config.projects_dir / project).is_dir():
             return 0
-        event = payload.get("hook_event_name")
         if event == "UserPromptSubmit":
             text, _ = project_inbox_context(config, project, payload)
             if text:
@@ -539,6 +543,20 @@ def cmd_save(args) -> int:
     return 0
 
 
+def cmd_schedule_run(args) -> int:
+    try:
+        schedule.run_loop(root_config(args), schedule.parse_duration(args.interval))
+    except schedule.ScheduleError as error:
+        raise RootError(str(error)) from error
+    return 0
+
+
+def cmd_schedule_report(args) -> int:
+    text = schedule.take_report(root_config(args))
+    print(text.rstrip() if text else "nothing pending")
+    return 0
+
+
 def cmd_schedule_tick(args) -> int:
     report = schedule.tick(root_config(args), dry_run=args.dry_run)
     if report.sections:
@@ -839,6 +857,10 @@ def build_parser() -> argparse.ArgumentParser:
     schedule_tick.add_argument("--dry-run", action="store_true", help="show what is due without running or recording it")
     schedule_tick.set_defaults(func=cmd_schedule_tick)
     schedule_sub.add_parser("list", help="list tasks with their last and next runs").set_defaults(func=cmd_schedule_list)
+    schedule_run = schedule_sub.add_parser("run", help="the background loop gopher launch starts: tick, then tell Gopher only when there is output")
+    schedule_run.add_argument("--interval", default="10m", help="time between ticks (default 10m)")
+    schedule_run.set_defaults(func=cmd_schedule_run)
+    schedule_sub.add_parser("report", help="print and clear the schedule output waiting for Gopher").set_defaults(func=cmd_schedule_report)
 
     project = sub.add_parser("project", help="manage projects").add_subparsers(dest="project_command", required=True)
     project_new = project.add_parser("new", help="create a project")

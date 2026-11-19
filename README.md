@@ -342,18 +342,22 @@ Read the release thread and route any bug reports to the api-v2-migration inbox.
 with `save.md` (`gopher save` every two hours) and `update-check.md` (nightly at 00:03):
 `gopher new` and `gopher setup` show them and ask whether to keep, retime, or drop each, and
 what else to add (`--default-schedule` skips the questions). The setup interview reviews the
-schedule too. Gopher's heartbeat
-is a single Claude Code cron job, recreated each session, that runs `gopher schedule tick` every
-ten minutes. The tick runs what is due, reports events (the backup running overdue; at the
-`proactive` level, projects whose STATUS has not moved in five working days), and prints nothing
-when there is nothing to do, so Gopher stays quiet. `gopher schedule` lists the tasks with their
-last and next runs; the heartbeat on the sidebar's bottom line turns yellow if it has been
-silent for half an hour.
+schedule too.
+
+The schedule runs outside Claude: `gopher launch` starts `gopher schedule run` in a hidden window
+of the gopher tmux session, which ticks every ten minutes, runs what is due, and reports events
+(the backup running overdue; at the `proactive` level, projects whose STATUS has not moved in five
+working days). Routine runs stay silent: `notify: failure` (the default for `save`) speaks only
+when the command fails, and `notify: change` (for `update-check`) only when its answer changes.
+When a tick has something for Gopher, the loop types one line into Gopher's pane once Gopher is
+idle with an empty input line, or attaches it to your next message to Gopher. `gopher schedule`
+lists the tasks with their last and next runs; the clock on the sidebar's bottom line turns
+yellow after half an hour without a tick.
 
 ## Health check
 
 `gopher doctor` checks the install and the root in one pass: hooks installed and pointing at a
-real `gopher`, tmux config loaded and Gopher running, the backup, the schedule and heartbeat, and
+real `gopher`, tmux config loaded and Gopher running, the backup, the schedule loop, and
 checkouts that are missing or owned by two projects. It exits non-zero on a problem; `-q` shows
 only what needs attention.
 

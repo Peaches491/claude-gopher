@@ -34,6 +34,7 @@ class FakeTmux:
     def __init__(self, sessions: dict[str, list[tuple[str, str, str]]]):
         self.sessions = sessions
         self.calls: list[tuple[str, ...]] = []
+        self.schedule = False
 
     def __call__(self, *argv: str, check: bool = True) -> subprocess.CompletedProcess:
         self.calls.append(argv)
@@ -56,6 +57,10 @@ class FakeTmux:
         elif command == "new-session":
             self.sessions["gopher"] = [("1", "@9", "gopher")]
             stdout = "%1"
+        elif command == "list-panes" and "#{window_name}\t#{pane_id}" in rest:
+            stdout = "schedule\t%5" if self.schedule else ""
+        elif command == "new-window":
+            self.schedule, stdout = True, "%5"
         elif command == "list-panes":
             stdout = "%0\tpython3\n%1\tclaude"
         elif command == "split-window":
@@ -114,7 +119,8 @@ def test_launch_creates_session_and_links_at_zero(config, monkeypatch):
     fake = FakeTmux({"main": [("1", "@1", "work")]})
     monkeypatch.setattr(launch, "tmux", fake)
     report = launch.launch(config, None)
-    assert report == ["started gopher session (@9)", "linked into main:0"]
+    assert report == ["started gopher session (@9)", "started the schedule loop", "linked into main:0"]
+    assert any("schedule run" in c[-2] for c in fake.calls if c[0] == "send-keys")
     assert ("0", "@9", "gopher") in fake.sessions["main"]
     sent = [c[-2] for c in fake.calls if c[0] == "send-keys"]
     assert not any(s.endswith(" tui") for s in sent) and any("launch --exec-agent" in s for s in sent)
@@ -123,8 +129,10 @@ def test_launch_creates_session_and_links_at_zero(config, monkeypatch):
 def test_launch_is_idempotent(config, monkeypatch):
     fake = FakeTmux({"main": [("0", "@9", "gopher")], "gopher": [("1", "@9", "gopher")]})
     monkeypatch.setattr(launch, "tmux", fake)
-    assert launch.launch(config, "main") == ["gopher session exists (@9)", "already linked at main:0"]
+    launch.launch(config, "main")
+    assert launch.launch(config, "main") == ["gopher session exists (@9)", "schedule loop running", "already linked at main:0"]
     assert not any(c[0] in ("new-session", "link-window") for c in fake.calls)
+    assert sum(c[0] == "new-window" for c in fake.calls) == 1
 
 
 def test_launch_refuses_occupied_index(config, monkeypatch):
@@ -137,7 +145,7 @@ def test_launch_refuses_occupied_index(config, monkeypatch):
 def test_launch_skips_linking_into_gopher_session(config, monkeypatch):
     fake = FakeTmux({"gopher": [("1", "@9", "gopher")]})
     monkeypatch.setattr(launch, "tmux", fake)
-    assert launch.launch(config, "gopher") == ["gopher session exists (@9)"]
+    assert launch.launch(config, "gopher") == ["gopher session exists (@9)", "started the schedule loop"]
 
 
 def test_write_prompt_assembles_gopher_sections(config):
@@ -176,10 +184,12 @@ def test_relink_leaves_occupied_zero_alone(config, monkeypatch):
 def test_restart_respawns_the_gopher_pane(config, monkeypatch):
     fake = FakeTmux({"main": [("0", "@9", "gopher")], "gopher": [("1", "@9", "gopher")]})
     monkeypatch.setattr(launch, "tmux", fake)
-    assert launch.restart(config, resume=True) == ["restarted Gopher in %1 (continuing its last conversation)"]
+    fake.schedule = True
+    assert launch.restart(config, resume=True) == ["restarted Gopher in %1 (continuing its last conversation)", "restarted the schedule loop"]
     assert ("respawn-pane", "-k", "-t", "%1", "-c", str(config.agent_dir)) in fake.calls
+    assert ("respawn-pane", "-k", "-t", "%5", "-c", str(config.root)) in fake.calls
     sent = [c[-2] for c in fake.calls if c[0] == "send-keys"]
-    assert sent == [f"gopher --root {config.root} launch --exec-agent --continue"]
+    assert sent == [f"gopher --root {config.root} launch --exec-agent --continue", f"gopher --root {config.root} schedule run"]
     assert not any(c[0] in ("new-session", "link-window") for c in fake.calls)
 
 

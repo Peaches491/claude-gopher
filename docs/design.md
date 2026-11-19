@@ -10,7 +10,8 @@ versioned **root**, the git checkouts it owns, and its own agent in a tmux windo
 **sidebar**. **Gopher**, a secretary agent one keypress away, takes anything the user says about
 any project and routes it: an inbox note, a live message to the project's agent, a ticket. It
 keeps a journal, answers status questions, maintains the user's own status notes on their
-behalf, and runs the root's recurring work on a heartbeat.
+behalf. The root's recurring work runs in the background and reaches Gopher only when something
+needs it.
 
 Gopher does no project work. Project agents do the work; scripts do anything destructive.
 
@@ -30,7 +31,7 @@ Gopher does no project work. Project agents do the work; scripts do anything des
 | Agent messaging | Native cross-session messaging (`ListAgents` / `SendMessage`); scripts use tmux instead |
 | Resources | `resources/<kind>/<name>.md`, one file per external thing, maintained by agents and Gopher |
 | Lifecycle | active -> archived (checkouts kept, caches cleared) -> closed (worktrees removed); nothing moves without a yes |
-| Recurring work | Data in the root's `schedule/`, run by one heartbeat, never only prompt text |
+| Recurring work | Data in the root's `schedule/`, run by a background loop outside Claude; Gopher hears only about ticks with something to say |
 | Site specifics | In the root's `config.toml` and `prompts/`; nothing in this repo names a company, repo layout, or tool |
 | Permissions | Gopher and project agents run in the same permission mode (`auto` by default), so messages flow without approval |
 
@@ -266,22 +267,25 @@ On top of the state, the TUI shows two attention marks:
 - Its directory holds `journal/<date>.md` (everything the user said and where it went),
   `pending/` (fan-outs being tracked: who was asked, who answered), `STATUS.md`, and the
   optional `notebook/` and `changelog.md` features.
-- Start of session: start the heartbeat, read every project's frontmatter and `human/STATUS.md`
+- Start of session: read every project's frontmatter and `human/STATUS.md`
   and today's journal, and brief the user in a few lines, most urgent first.
 - Routing, replies, fan-outs, tickets, the reference library, `human/STATUS.md` edits, and the
   end-of-day and weekly rituals follow the `gopher` prompt. Proactivity (`gopher proactivity`
   or the sidebar's `P`) sets how much it says unprompted, and tells the running Gopher.
 
-### Schedule and heartbeat
+### Schedule
 
-Gopher only acts when a message arrives, and Claude Code cron jobs are session-only and expire,
-so recurring work lives in data:
+Recurring work lives in data and runs outside Claude, so routine ticks cost Gopher nothing and
+nothing is lost when Gopher restarts (a Claude Code cron job would show every tick as a turn,
+die with the session, and expire after 7 days):
 
 - `schedule/<task>.md`: frontmatter `every` (`10m`, `2h`, `1d`) or `at` (`HH:MM`, local, daily),
   optional `days` (`weekdays`, `weekends`, `mon,thu`), `run` (a shell command), `until` (last
-  date), `enabled`; the body tells Gopher what to do with the result. Defaults: `save` (every
-  `save_every_hours`, runs `gopher save`) and `update-check` (00:03, runs
-  `gopher update --check`).
+  date), `enabled`, `notify` (`always`, the default; `failure`: only when `run` fails; `change`:
+  only when its output differs from the previous run); the body tells Gopher what to do with the
+  result. Defaults: `save` (every
+  `save_every_hours`, runs `gopher save`, `notify: failure`) and `update-check` (00:03, runs
+  `gopher update --check`, `notify: change`).
 - `gopher schedule tick` (under a lock) runs each due task's command in the root, records runs in
   `<state_dir>/schedule.json`, and prints a section per due task: output, then instructions. It
   adds events: the backup newly overdue, and at the proactive level projects whose STATUS has
@@ -289,10 +293,14 @@ so recurring work lives in data:
   waits for the next one; a missed slot runs once. Ended tasks and malformed files are reported
   once. No output means nothing to do. Existing roots get the default schedule on their first
   tick.
-- The heartbeat is one session-only CronCreate job every 10 minutes, created at the start of each
-  session and after a restart; Gopher runs the tick and stays silent when it prints nothing.
-  `gopher launch --exec-agent` records the start, and the tick asks Gopher to recreate the job
-  after six days, before the 7-day expiry.
+- `gopher schedule run` is the loop: `gopher launch` keeps it in a hidden `schedule` window of the
+  gopher tmux session (`--restart` respawns it with Gopher), one per root under a lock. It ticks
+  every 10 minutes and appends any output to `<state_dir>/schedule-report.md`.
+- Delivery: scripts cannot use cross-session messaging, so when a report is waiting, Gopher's
+  record says it is idle, and its input line is empty, the loop types one line into Gopher's pane:
+  "Schedule: run `gopher schedule report` and act on what it prints." (again after 30 minutes if
+  the report is still there). Otherwise Gopher's UserPromptSubmit hook attaches the same line to
+  the user's next message. `gopher schedule report` prints and clears the report.
 - `gopher schedule` lists tasks with their last and next runs. Monitors and reminders the user
   asks for become tasks with an `until`.
 
@@ -320,10 +328,10 @@ seconds.
   for any project without an open window. Within a colour: most urgent agent first, then most
   recent. Resource links hide closed tickets and PRs, show merged PRs for a day, and collapse a
   PR stack to its top PR.
-- **Bottom line**: the backup (💾 age since the last save, unsaved changes as `+lines -lines
-  ~files`, ⇡ unpushed commits, ✓ when clean) and the heartbeat (💓 age of the last tick, ⏭ the
-  next task due). The backup turns yellow when a save is overdue and red without a repository or
-  upstream; the heartbeat turns yellow after 30 silent minutes. Git is read once a minute.
+- **Bottom line**: the backup (💾 age since the last save, unsaved changes as `(+lines -lines
+  ~files)` in green, red, and yellow, ⇡ unpushed commits, ✓ when clean) and the schedule (🕒 age of the last tick, ➡️ the
+  next custom task due; the built-in `save` and `update-check` are left out). The backup turns yellow when a save is overdue and red without a repository or
+  upstream; the clock turns yellow after 30 minutes without a tick. Git is read once a minute.
 
 | Key | Action |
 |---|---|
@@ -388,8 +396,8 @@ Releases are `vX.Y.Z` tags on `[gopher] update_source`. `gopher update --check` 
 `yes` (editable installs are told to `git pull`). When the nightly `update-check` task finds one,
 Gopher mentions it once; on the user's yes it installs it, restarts the sidebars
 (`gopher workon sidebar --all --restart`), and restarts itself last
-(`gopher launch --restart --continue`, which resumes the conversation and restarts the
-heartbeat).
+(`gopher launch --restart --continue`, which resumes the conversation and respawns the schedule
+loop).
 
 ### Health (`gopher doctor`)
 
@@ -397,7 +405,7 @@ heartbeat).
 problem: the config parses and the state dir exists; every gopher hook is in
 `~/.claude/settings.json` and points at an existing binary; tmux is running with gopher's config
 loaded and the Gopher session up; the backup (repository, upstream, overdue); the schedule
-(malformed tasks, failing commands) and heartbeat; checkouts that are missing or owned twice.
+(malformed tasks, failing commands), the schedule loop and its last tick; checkouts that are missing or owned twice.
 `-q` prints only warnings and problems.
 
 ### tmux integration

@@ -5,10 +5,11 @@ import os
 import re
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from claude_gopher import rootgit
+from claude_gopher.overview import current_sessions
 from claude_gopher.config import Config, ConfigError, gopher_proactivity, gopher_save_every_hours, gopher_update_check
 from claude_gopher.projects import read_frontmatter
 
@@ -18,28 +19,37 @@ UNIT_SECONDS = {"m": 60, "h": 3600, "d": 86400}
 CLOCK = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 DAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 DAY_SETS = {"daily": DAY_NAMES, "weekdays": DAY_NAMES[:5], "weekends": DAY_NAMES[5:]}
-KNOWN_FIELDS = {"every", "at", "days", "run", "until", "enabled"}
+KNOWN_FIELDS = {"every", "at", "days", "run", "until", "enabled", "notify"}
+NOTIFY_MODES = ("always", "failure", "change")
 RUN_TIMEOUT = 600
 OUTPUT_LINES = 40
 STALE_WEEKDAYS = 5
 HEARTBEAT_STALE_SECONDS = 30 * 60
-RENEW_SECONDS = 6 * 86400
+LOOP_SECONDS = 10 * 60
+DELIVERY_CHECK_SECONDS = 30
+RENOTIFY_SECONDS = 30 * 60
+REPORT_FILE = "schedule-report.md"
+NOTIFY_TEXT = "Schedule: run `gopher schedule report` and act on what it prints."
+PROMPT_MARK = "\u276f"
 OPEN_STATES = ("active", "blocked", "waiting-review")
 
 SCHEDULE_README = """# Schedule
 
 Gopher's recurring work. One file per task: frontmatter says when, the body says what Gopher does
-with the result. Gopher's heartbeat runs `gopher schedule tick` every few minutes; each tick runs
-the tasks that are due and hands Gopher their output and instructions. `gopher schedule` lists
+with the result. A background loop (`gopher schedule run`, started by `gopher launch`) ticks
+every 10 minutes: it runs the tasks that are due and hands Gopher their output and instructions,
+and stays silent when there is nothing to say. `gopher schedule` lists
 the tasks with their last and next runs. Edit these files yourself or ask Gopher to.
 
 Frontmatter fields:
 
 - `every: 10m` / `2h` / `1d`: run at this interval. Or
-- `at: "08:45"`: run once a day at this local time (after it, if the heartbeat was asleep).
+- `at: "08:45"`: run once a day at this local time (after it, if the loop was not running).
 - `days: weekdays`: limit to `daily` (default), `weekdays`, `weekends`, or a list like `mon,wed,fri`.
 - `run: <command>`: a shell command the tick runs in the root first; its output goes to Gopher.
 - `until: YYYY-MM-DD`: last day to run; afterwards the tick reports it once so Gopher can remove it.
+- `notify: failure` / `notify: change`: tell Gopher only when `run` fails, or when its output
+  differs from the previous run (default `always`).
 - `enabled: false`: keep the file but skip it.
 
 The body is plain instructions for Gopher. A task without `run` is just a reminder: Gopher does
@@ -48,8 +58,8 @@ what the body says (read a thread, check a dashboard) and reports at most a line
 
 
 SAVE_BODY = (
-    "Report the save in one line: how many commits and which projects. If it failed (a merge in\n"
-    "progress, a rejected push), tell the user what it said and do not try to fix the repository."
+    "The save failed: tell the user in one line what it said (a merge in progress, a rejected\n"
+    "push) and do not try to fix the repository yourself."
 )
 UPDATE_BODY = (
     "If it reports a newer release, do not interrupt the user: note it in the journal and mention it\n"
@@ -57,6 +67,7 @@ UPDATE_BODY = (
     "Mention a given version once. Install only when the user says so."
 )
 DEFAULT_UPDATE_AT = "00:03"
+BUILTIN_TASKS = ("save", "update-check")
 
 
 @dataclass
@@ -66,8 +77,8 @@ class Default:
     run: str
     body: str
     purpose: str
+    notify: str = "always"
 
-BUILTIN_TASKS = ("save", "update-check")
 
 def timing_lines(when: str) -> list[str]:
     every = at = days = None
@@ -92,8 +103,9 @@ def timing_lines(when: str) -> list[str]:
     return lines
 
 
-def task_text(when: str, body: str, run: str | None = None) -> str:
-    lines = ["---", *timing_lines(when), *([f"run: {run}"] if run else []), "---", body.strip(), ""]
+def task_text(when: str, body: str, run: str | None = None, notify: str = "always") -> str:
+    extra = ([f"run: {run}"] if run else []) + ([f"notify: {notify}"] if notify != "always" else [])
+    lines = ["---", *timing_lines(when), *extra, "---", body.strip(), ""]
     return "\n".join(lines)
 
 
@@ -105,18 +117,18 @@ def defaults(config: Config) -> list[Default]:
         hours, check_updates = 0, False
     tasks = []
     if hours:
-        tasks.append(Default("save", f"{hours}h", "gopher save", SAVE_BODY, "commit and push the root (gopher save)"))
+        tasks.append(Default("save", f"{hours}h", "gopher save", SAVE_BODY, "commit and push the root (gopher save)", "failure"))
     if check_updates:
-        tasks.append(Default("update-check", DEFAULT_UPDATE_AT, "gopher update --check", UPDATE_BODY, "check for a new gopher release"))
+        tasks.append(Default("update-check", DEFAULT_UPDATE_AT, "gopher update --check", UPDATE_BODY, "check for a new gopher release", "change"))
     return tasks
 
 
 def default_files(config: Config) -> dict[str, str]:
-    return {task.name: task_text(task.when, task.body, task.run) for task in defaults(config)}
+    return {task.name: task_text(task.when, task.body, task.run, task.notify) for task in defaults(config)}
 
 
 def interview(config: Config, ask, say) -> dict[str, str]:
-    say("Gopher's schedule: recurring work its heartbeat runs, one file per task in schedule/.")
+    say("Gopher's schedule: recurring work run in the background, one file per task in schedule/.")
     files = {}
     for task in defaults(config):
         say(f"  {task.name}: {task.purpose}, {'every ' if DURATION.match(task.when) else 'daily at '}{task.when}")
@@ -127,7 +139,7 @@ def interview(config: Config, ask, say) -> dict[str, str]:
                 break
             when = task.when if answer.lower() in ("y", "yes", "") else answer
             try:
-                files[task.name] = task_text(when, task.body, task.run)
+                files[task.name] = task_text(when, task.body, task.run, task.notify)
                 break
             except ScheduleError as error:
                 say(str(error))
@@ -165,6 +177,7 @@ class Task:
     run: str | None = None
     until: datetime.date | None = None
     enabled: bool = True
+    notify: str = "always"
     body: str = ""
 
     def timing(self) -> str:
@@ -218,6 +231,10 @@ def parse_task(path: Path) -> Task:
         if fields["enabled"].lower() not in ("true", "false"):
             raise ScheduleError(f"enabled must be true or false, not {fields['enabled']!r}")
         task.enabled = fields["enabled"].lower() == "true"
+    if "notify" in fields:
+        if fields["notify"] not in NOTIFY_MODES:
+            raise ScheduleError(f"notify must be one of {', '.join(NOTIFY_MODES)}, not {fields['notify']!r}")
+        task.notify = fields["notify"]
     return task
 
 
@@ -269,12 +286,6 @@ def save_state(config: Config, state: dict) -> None:
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(state, indent=2, sort_keys=True))
     temporary.replace(path)
-
-
-def mark_launched(config: Config, now: float | None = None) -> None:
-    state = load_state(config)
-    state["heartbeat_since"] = now or time.time()
-    save_state(config, state)
 
 
 def local(timestamp: float) -> datetime.datetime:
@@ -403,6 +414,7 @@ def save_interval_hours(config: Config) -> float:
 @dataclass
 class TickReport:
     sections: list[str]
+    ran: list[str] = field(default_factory=list)
 
     def text(self) -> str:
         return "\n\n".join(self.sections)
@@ -420,7 +432,7 @@ def tick(config: Config, now: float | None = None, dry_run: bool = False) -> Tic
 
 
 def locked_tick(config: Config, now: float, dry_run: bool) -> TickReport:
-    sections = []
+    sections, ran = [], []
     if dry_run and not schedule_dir(config).exists():
         return TickReport([f"would create {schedule_dir(config)} with the default tasks"])
     seeded = seed(config)
@@ -441,18 +453,28 @@ def locked_tick(config: Config, now: float, dry_run: bool) -> TickReport:
         if not is_due(task, entry, now):
             continue
         section = [f"## {task.name} ({task.timing()})"]
+        speak = True
         if task.run:
             if dry_run:
                 section.append(f"would run: {task.run}")
             else:
                 code, output = run_command(config, task.run)
-                entry["exit"] = code
+                previous = entry.get("output")
+                entry["exit"], entry["output"] = code, output
+                if task.notify == "failure":
+                    speak = code != 0
+                elif task.notify == "change":
+                    speak = code != 0 or (previous is not None and output != previous)
                 section.append(f"$ {task.run}  [exit {code}]" + (f"\n{output}" if output else ""))
+                ran.append(f"{task.name} (exit {code})")
+        elif not dry_run:
+            ran.append(task.name)
         if task.body:
             section.append(task.body)
         if not dry_run:
             entry["last"] = now
-        sections.append("\n".join(section))
+        if speak:
+            sections.append("\n".join(section))
     reported = state.setdefault("problems", {})
     for name, problem in problems.items():
         key = f"{problem}@{(schedule_dir(config) / f'{name}.md').stat().st_mtime}"
@@ -481,17 +503,101 @@ def locked_tick(config: Config, now: float, dry_run: bool) -> TickReport:
             del flagged[project]
     if events:
         sections.append("## Events\n" + "\n".join(f"- {event}" for event in events))
-    since = state.get("heartbeat_since")
-    if since and now - since >= RENEW_SECONDS:
-        state["heartbeat_since"] = now
-        sections.append("## Renew the heartbeat\nRecurring jobs expire after 7 days: delete your heartbeat cron and create it again now.")
     state["last_tick"] = now
     if not dry_run:
         save_state(config, state)
     if sections:
         stamp = local(now).strftime("%Y-%m-%d %H:%M")
         sections.insert(0, f"# gopher schedule tick ({stamp})")
-    return TickReport(sections)
+    return TickReport(sections, ran)
+
+
+def report_path(config: Config) -> Path:
+    return config.state_dir / REPORT_FILE
+
+
+def queue_report(config: Config, text: str) -> None:
+    path = report_path(config)
+    existing = path.read_text().rstrip("\n") if path.is_file() else ""
+    path.write_text(existing + ("\n\n" if existing else "") + text.strip() + "\n")
+
+
+def take_report(config: Config) -> str:
+    path = report_path(config)
+    try:
+        text = path.read_text()
+    except OSError:
+        return ""
+    path.unlink(missing_ok=True)
+    state = load_state(config)
+    if state.pop("notified_at", None) is not None:
+        save_state(config, state)
+    return text
+
+
+def input_is_empty(screen: str) -> bool:
+    prompts = [line for line in screen.splitlines() if line.lstrip().startswith(PROMPT_MARK)]
+    return bool(prompts) and prompts[-1].strip() == PROMPT_MARK
+
+
+def tmux_out(*argv: str) -> str | None:
+    try:
+        result = subprocess.run(["tmux", *argv], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def gopher_pane() -> str | None:
+    listing = tmux_out("list-panes", "-s", "-t", "=gopher:", "-F", "#{pane_id}\t#{pane_current_command}") or ""
+    return next((pane for pane, _, command in (line.partition("\t") for line in listing.splitlines()) if command == "claude"), None)
+
+
+def gopher_idle(config: Config, pane: str) -> bool:
+    return any(s.get("pane") == pane and s.get("state") == "idle" for s in current_sessions(config, prune=False))
+
+
+def deliver(config: Config, now: float) -> bool:
+    if not report_path(config).is_file():
+        return False
+    state = load_state(config)
+    if now - state.get("notified_at", 0) < RENOTIFY_SECONDS:
+        return False
+    pane = gopher_pane()
+    if not pane or not gopher_idle(config, pane) or not input_is_empty(tmux_out("capture-pane", "-p", "-t", pane) or ""):
+        return False
+    if tmux_out("send-keys", "-t", pane, "-l", NOTIFY_TEXT) is None or tmux_out("send-keys", "-t", pane, "Enter") is None:
+        return False
+    state["notified_at"] = now
+    save_state(config, state)
+    return True
+
+
+def loop_log(message: str) -> None:
+    print(f"{time.strftime('%H:%M')}  {message}", flush=True)
+
+
+def run_loop(config: Config, interval: int = LOOP_SECONDS, stop=None, clock=time.time, sleep=time.sleep, log=loop_log) -> None:
+    config.state_dir.mkdir(parents=True, exist_ok=True)
+    with open(config.state_dir / "schedule-run.lock", "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ScheduleError("a schedule loop is already running for this root") from None
+        log(f"schedule loop for {config.root}: ticking every {format_age(interval)}, Gopher hears only when something needs it")
+        while not (stop and stop()):
+            now = clock()
+            if now - load_state(config).get("last_tick", 0) >= interval:
+                report = tick(config, now)
+                ran = ", ".join(report.ran) or "nothing due"
+                if report.sections:
+                    queue_report(config, report.text())
+                    log(f"tick: ran {ran}; queued a report for Gopher")
+                else:
+                    log(f"tick: ran {ran}; nothing for Gopher")
+            if deliver(config, now):
+                log("told Gopher to read the report")
+            sleep(DELIVERY_CHECK_SECONDS)
 
 
 @dataclass
@@ -525,8 +631,8 @@ def heartbeat_summary(config: Config, now: float | None = None) -> tuple[str, bo
     if not schedule_dir(config).is_dir() and not last:
         return None
     if not last:
-        return "heartbeat not started", False
-    text = f"heartbeat {format_age(now - last)} ago"
+        return "no tick yet", False
+    text = f"last tick {format_age(now - last)} ago"
     rows, _ = listing(config, now)
     upcoming = sorted((row for row in rows if row.next), key=lambda row: row.next)
     if upcoming:

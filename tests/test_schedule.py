@@ -1,4 +1,6 @@
 import datetime
+import io
+import json
 import subprocess
 
 import pytest
@@ -139,23 +141,13 @@ def test_backup_overdue_is_an_event_once_per_episode(config, monkeypatch):
     assert "Backup overdue" not in schedule.tick(config, now + 600).text()
 
 
-def test_renew_reminder_six_days_after_launch(config):
-    (config.schedule_dir / "save.md").unlink()
-    (config.schedule_dir / "update-check.md").unlink()
-    now = at("2026-11-18T10:00:00")
-    schedule.mark_launched(config, now)
-    assert schedule.tick(config, now + 86400).sections == []
-    assert "Renew the heartbeat" in schedule.tick(config, now + 6 * 86400 + 60).text()
-    assert schedule.tick(config, now + 6 * 86400 + 660).sections == []
-
-
 def test_heartbeat_summary_and_listing(config, capsys, monkeypatch):
     now = at("2026-11-18T10:00:00")
-    assert schedule.heartbeat_summary(config, now) == ("heartbeat not started", False)
+    assert schedule.heartbeat_summary(config, now) == ("no tick yet", False)
     write(config, "save", "---\nevery: 2h\nrun: true\n---\n")
     schedule.tick(config, now)
     text, stalled = schedule.heartbeat_summary(config, now + 300)
-    assert text == "heartbeat 5m ago, next: save in 1h 55m" and not stalled
+    assert text == "last tick 5m ago, next: save in 1h 55m" and not stalled
     assert schedule.heartbeat_summary(config, now + 3600)[1]
     monkeypatch.setenv("GOPHER_HOME", str(config.root))
     assert main(["schedule"]) == 0
@@ -213,7 +205,7 @@ def test_interview_keeps_changes_drops_and_adds(config):
     said = []
     files = schedule.interview(config, ask, said.append)
     assert sorted(files) == ["save", "standup"]
-    assert files["save"].startswith("---\nevery: 4h\nrun: gopher save\n---\n")
+    assert files["save"].startswith("---\nevery: 4h\nrun: gopher save\nnotify: failure\n---\n")
     assert files["standup"] == '---\nat: "09:00"\ndays: weekdays\n---\nRemind me to post the standup.\n'
     assert any("say when" in line for line in said)
     assert said[-1].startswith("Schedule: save, standup.")
@@ -241,3 +233,89 @@ def test_heartbeat_compact(config):
     assert schedule.heartbeat_compact(config, now + 300) == ("\U0001f552 5m", False)
     write(config, "standup", '---\nat: "11:00"\n---\nStandup.\n')
     assert schedule.heartbeat_compact(config, now + 300) == ("\U0001f552 5m  \u27a1\ufe0f  standup in 55m", False)
+
+
+def test_notify_modes_keep_routine_runs_quiet(config):
+    (config.schedule_dir / "update-check.md").unlink()
+    write(config, "save", "---\nevery: 1h\nrun: echo saved\nnotify: failure\n---\nReport it.\n")
+    write(config, "watch", "---\nevery: 1h\nrun: cat state.txt\nnotify: change\n---\nSay what changed.\n")
+    (config.root / "state.txt").write_text("v1\n")
+    now = at("2026-11-18T10:00:00")
+    assert schedule.tick(config, now).sections == []
+    assert schedule.tick(config, now + 3600).sections == []
+    (config.root / "state.txt").write_text("v2\n")
+    text = schedule.tick(config, now + 7200).text()
+    assert "## watch" in text and "v2" in text and "## save" not in text
+    write(config, "save", "---\nevery: 1h\nrun: exit 3\nnotify: failure\n---\nReport it.\n")
+    assert "[exit 3]" in schedule.tick(config, now + 3 * 3600).text()
+    write(config, "bad", "---\nevery: 1h\nnotify: sometimes\n---\n")
+    assert "notify must be one of" in schedule.load_tasks(config)[1]["bad"]
+
+
+def test_report_queue_and_take(config):
+    schedule.queue_report(config, "# one")
+    schedule.queue_report(config, "# two")
+    state = schedule.load_state(config)
+    state["notified_at"] = 5
+    schedule.save_state(config, state)
+    assert schedule.take_report(config) == "# one\n\n# two\n"
+    assert schedule.take_report(config) == "" and "notified_at" not in schedule.load_state(config)
+
+
+def test_input_is_empty_reads_the_prompt_line():
+    assert schedule.input_is_empty("output\n\u2500\u2500\n\u276f \n\u2500\u2500\n  status")
+    assert not schedule.input_is_empty("\u276f half a thought")
+    assert not schedule.input_is_empty("no prompt here")
+
+
+def test_deliver_types_only_when_gopher_is_idle_and_empty(config, monkeypatch):
+    sent = []
+    screens = {"value": "\u276f "}
+    monkeypatch.setattr(schedule, "gopher_pane", lambda: "%3")
+    monkeypatch.setattr(schedule, "gopher_idle", lambda config, pane: idle["value"])
+    monkeypatch.setattr(schedule, "tmux_out", lambda *argv: sent.append(argv) or (screens["value"] if argv[0] == "capture-pane" else ""))
+    idle = {"value": False}
+    now = at("2026-11-18T10:00:00")
+    assert not schedule.deliver(config, now)
+    schedule.queue_report(config, "# due")
+    assert not schedule.deliver(config, now)
+    idle["value"] = True
+    screens["value"] = "\u276f typing"
+    assert not schedule.deliver(config, now)
+    screens["value"] = "\u276f "
+    assert schedule.deliver(config, now)
+    assert ("send-keys", "-t", "%3", "-l", schedule.NOTIFY_TEXT) in sent
+    assert not schedule.deliver(config, now + 60)
+    assert schedule.deliver(config, now + schedule.RENOTIFY_SECONDS + 1)
+
+
+def test_run_loop_ticks_queues_and_stops(config, monkeypatch):
+    (config.schedule_dir / "update-check.md").unlink()
+    write(config, "standup", "---\nevery: 1h\n---\nPost the standup.\n")
+    monkeypatch.setattr(schedule, "deliver", lambda config, now: False)
+    clock = iter([at("2026-11-18T10:00:00"), at("2026-11-18T10:00:30")])
+    calls = {"n": 0}
+
+    def stop():
+        calls["n"] += 1
+        return calls["n"] > 2
+
+    logged = []
+    schedule.run_loop(config, 600, stop=stop, clock=lambda: next(clock), sleep=lambda seconds: None, log=logged.append)
+    report = schedule.take_report(config)
+    assert report.count("Post the standup.") == 1
+    assert len(logged) == 2
+    assert logged[1].startswith("tick: ran save (exit ") and logged[1].endswith("), standup; queued a report for Gopher")
+
+
+def test_hook_attaches_pending_report_to_gophers_next_prompt(config, monkeypatch, capsys):
+    monkeypatch.setenv("GOPHER_HOME", str(config.root))
+    monkeypatch.setenv("GOPHER_AGENT", "gopher")
+    payload = {"hook_event_name": "UserPromptSubmit", "session_id": "g", "cwd": str(config.agent_dir)}
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
+    assert main(["hook", "inbox"]) == 0
+    assert capsys.readouterr().out == ""
+    schedule.queue_report(config, "# due")
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
+    assert main(["hook", "inbox"]) == 0
+    assert "gopher schedule report" in capsys.readouterr().out

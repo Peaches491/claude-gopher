@@ -78,6 +78,8 @@ def check_tmux(env: dict) -> list[Check]:
         checks.append(Check(WARN, "tmux", "prefix g is not gopher's popup; add the line from `gopher shell-init tmux --path` to your tmux config"))
     if tmux("has-session", "-t", "=gopher").returncode != 0:
         checks.append(Check(WARN, "gopher", "the Gopher session is not running; start it with gopher launch"))
+    elif "schedule" not in tmux("list-windows", "-t", "=gopher", "-F", "#{window_name}").stdout.split():
+        checks.append(Check(WARN, "schedule", "the background schedule loop is not running; gopher launch starts it"))
     return checks or [Check(OK, "tmux", "gopher's tmux config is loaded and Gopher is running")]
 
 
@@ -89,9 +91,9 @@ def check_schedule(config: Config, now: float) -> list[Check]:
     checks += [Check(WARN, "schedule", f"{row.name} last exited {row.note.split()[-1]}") for row in rows if "last exit" in row.note]
     last = schedule.load_state(config).get("last_tick")
     if not last:
-        checks.append(Check(WARN, "heartbeat", "no tick yet; Gopher starts its heartbeat at the start of a session"))
+        checks.append(Check(WARN, "heartbeat", "no tick yet; gopher launch starts the background schedule loop"))
     elif now - last > schedule.HEARTBEAT_STALE_SECONDS:
-        checks.append(Check(WARN, "heartbeat", f"last tick {schedule.format_age(now - last)} ago; ask Gopher to restart its heartbeat (or gopher launch --restart --continue)"))
+        checks.append(Check(WARN, "heartbeat", f"last tick {schedule.format_age(now - last)} ago; restart the loop with gopher launch --restart --continue"))
     return checks or [Check(OK, "schedule", f"{len(rows)} task(s); heartbeat {schedule.format_age(now - last)} ago")]
 
 

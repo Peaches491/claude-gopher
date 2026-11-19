@@ -9,18 +9,19 @@ from claude_gopher.workon import SIDEBAR_COMMANDS, Agent, WorkonError, agent_arg
 
 SESSION = "gopher"
 WINDOW = "gopher"
+SCHEDULE_WINDOW = "schedule"
 LINK_INDEX = "0"
 DEFAULT_MODEL = "sonnet"
 PROMPT_FILE = "gopher-prompt.md"
 PROMPT_ENV = "GOPHER_PROMPT_FILE"
 GOPHER_KICKOFF = (
     "Start of session: read every project's STATUS.md frontmatter and human/STATUS.md, and today's journal, "
-    "start your heartbeat (see Schedule), then give me a short briefing and ask what I'd like to do."
+    "then give me a short briefing and ask what I'd like to do."
 )
 GOPHER_RESTART_KICKOFF = (
-    "You were just restarted (for example after a gopher update), continuing this conversation. Session-only "
-    "scheduled jobs did not survive: start your heartbeat again (see Schedule), then tell me in one line that it is "
-    "running and what the first tick did."
+    "You were just restarted (for example after a gopher update), continuing this conversation. The schedule runs "
+    "in the background now, so there is nothing to reschedule; if a heartbeat CronCreate job is still listed, delete "
+    "it. Then tell me in one line that you are back."
 )
 AGENT_STATUS = """---
 summary: Gopher agent directory.
@@ -94,7 +95,6 @@ def agent_lines(config: Config, passthrough: list[str], resume: bool = False) ->
 def exec_agent(config: Config, passthrough: list[str], resume: bool = False) -> None:
     ensure_agent_dir(config)
     write_prompt(config)
-    schedule.mark_launched(config)
     run_lines(agent_lines(config, passthrough, resume))
 
 
@@ -117,6 +117,29 @@ def create_session(config: Config) -> str:
     return gopher_window()
 
 
+def schedule_command(config: Config) -> str:
+    return f"gopher --root {shlex.quote(str(config.root))} schedule run"
+
+
+def schedule_pane() -> str | None:
+    listing = tmux("list-panes", "-s", "-t", f"={SESSION}:", "-F", "#{window_name}\t#{pane_id}", check=False).stdout
+    return next((pane for name, _, pane in (line.partition("\t") for line in listing.splitlines()) if name == SCHEDULE_WINDOW), None)
+
+
+def ensure_schedule(config: Config, respawn: bool = False) -> str:
+    pane = schedule_pane()
+    if pane and not respawn:
+        return "schedule loop running"
+    if pane:
+        tmux("respawn-pane", "-k", "-t", pane, "-c", str(config.root))
+        message = "restarted the schedule loop"
+    else:
+        pane = out("new-window", "-d", "-t", f"={SESSION}:", "-n", SCHEDULE_WINDOW, "-c", str(config.root), "-P", "-F", "#{pane_id}")
+        message = "started the schedule loop"
+    tmux("send-keys", "-t", pane, schedule_command(config), "Enter")
+    return message
+
+
 def agent_pane(window: str) -> str:
     panes = [line.split("\t") for line in out("list-panes", "-t", window, "-F", "#{pane_id}\t#{pane_current_command}").splitlines()]
     return next((pane for pane, command in panes if command not in SIDEBAR_COMMANDS), panes[0][0])
@@ -129,7 +152,10 @@ def restart(config: Config, resume: bool) -> list[str]:
     pane = agent_pane(gopher_window())
     tmux("respawn-pane", "-k", "-t", pane, "-c", str(config.agent_dir))
     tmux("send-keys", "-t", pane, agent_command(config, resume), "Enter")
-    return [f"restarted Gopher in {pane}" + (" (continuing its last conversation)" if resume else " (fresh session)")]
+    return [
+        f"restarted Gopher in {pane}" + (" (continuing its last conversation)" if resume else " (fresh session)"),
+        ensure_schedule(config, respawn=True),
+    ]
 
 
 def current_session() -> str | None:
@@ -187,6 +213,7 @@ def launch(config: Config, session: str | None) -> list[str]:
     else:
         window = create_session(config)
         report.append(f"started gopher session ({window})")
+    report.append(ensure_schedule(config))
     target = session or current_session()
     if target and target != SESSION:
         report.append(link(window, target))
