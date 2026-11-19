@@ -19,8 +19,9 @@ UNIT_SECONDS = {"m": 60, "h": 3600, "d": 86400}
 CLOCK = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 DAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 DAY_SETS = {"daily": DAY_NAMES, "weekdays": DAY_NAMES[:5], "weekends": DAY_NAMES[5:]}
-KNOWN_FIELDS = {"every", "at", "days", "run", "until", "enabled", "notify", "background"}
-NOTIFY_MODES = ("always", "failure", "change")
+HOURS = re.compile(r"^(\d{1,2})(?::(\d\d))?\s*-\s*(\d{1,2})(?::(\d\d))?$")
+KNOWN_FIELDS = {"every", "at", "days", "hours", "run", "until", "enabled", "notify", "background"}
+NOTIFY_MODES = ("always", "failure", "change", "output")
 RUN_TIMEOUT = 600
 OUTPUT_LINES = 40
 STALE_WEEKDAYS = 5
@@ -46,10 +47,11 @@ Frontmatter fields:
 - `every: 10m` / `2h` / `1d`: run at this interval. Or
 - `at: "08:45"`: run once a day at this local time (after it, if the loop was not running).
 - `days: weekdays`: limit to `daily` (default), `weekdays`, `weekends`, or a list like `mon,wed,fri`.
+- `hours: 8-18`: with `every`, run only between these local times (`08:30-17:00` works too).
 - `run: <command>`: a shell command the tick runs in the root first; its output goes to Gopher.
 - `until: YYYY-MM-DD`: last day to run; afterwards the tick reports it once so Gopher can remove it.
-- `notify: failure` / `notify: change`: tell Gopher only when `run` fails, or when its output
-  differs from the previous run (default `always`).
+- `notify: failure` / `change` / `output`: tell Gopher only when `run` fails, when its output
+  differs from the previous run, or when it prints anything (default `always`).
 - `background: true`: housekeeping; keep it off the sidebar's "next" (gopher's own `save` and
   `update-check` default to this).
 - `enabled: false`: keep the file but skip it.
@@ -181,6 +183,7 @@ class Task:
     every: int | None = None
     at: tuple[int, int] | None = None
     days: tuple[str, ...] = DAY_NAMES
+    hours: tuple[int, int] | None = None
     run: str | None = None
     until: datetime.date | None = None
     enabled: bool = True
@@ -192,6 +195,8 @@ class Task:
         when = f"every {format_seconds(self.every)}" if self.every else f"at {self.at[0]:02d}:{self.at[1]:02d}"
         if self.days != DAY_NAMES:
             when += " " + next((name for name, days in DAY_SETS.items() if days == self.days), ",".join(self.days))
+        if self.hours:
+            when += " " + "-".join(f"{minute // 60:02d}:{minute % 60:02d}" for minute in self.hours)
         return when
 
 
@@ -212,6 +217,16 @@ def parse_days(value: str) -> tuple[str, ...]:
     return days
 
 
+def parse_hours(value: str) -> tuple[int, int]:
+    match = HOURS.match(value.strip())
+    if match:
+        start = int(match.group(1)) * 60 + int(match.group(2) or 0)
+        end = int(match.group(3)) * 60 + int(match.group(4) or 0)
+        if start != end and start < 24 * 60 and end <= 24 * 60 and int(match.group(2) or 0) < 60 and int(match.group(4) or 0) < 60:
+            return start, end
+    raise ScheduleError(f"hours must be a local time range like 8-18 or 08:30-17:00, not {value!r}")
+
+
 def parse_task(path: Path) -> Task:
     fields, body = read_frontmatter(path.read_text())
     task = Task(name=path.stem, path=path, body=body.strip())
@@ -229,6 +244,10 @@ def parse_task(path: Path) -> Task:
         task.at = (int(match.group(1)), int(match.group(2)))
     if "days" in fields:
         task.days = parse_days(fields["days"])
+    if "hours" in fields:
+        if not task.every:
+            raise ScheduleError("hours only applies to every; an at task already runs at one time")
+        task.hours = parse_hours(fields["hours"])
     task.run = fields.get("run") or None
     if fields.get("until"):
         try:
@@ -340,12 +359,38 @@ def day_allowed(task: Task, now: float) -> bool:
     return DAY_NAMES[local(now).weekday()] in task.days
 
 
+def in_hours(task: Task, now: float) -> bool:
+    if not task.hours:
+        return True
+    moment = local(now)
+    minute = moment.hour * 60 + moment.minute
+    start, end = task.hours
+    return start <= minute < end if start < end else minute >= start or minute < end
+
+
+def allowed(task: Task, now: float) -> bool:
+    return day_allowed(task, now) and in_hours(task, now)
+
+
+def next_allowed(task: Task, after: float) -> float | None:
+    if allowed(task, after):
+        return after
+    moment = local(after)
+    start = task.hours[0] if task.hours else 0
+    for ahead in range(8):
+        day = moment.date() + datetime.timedelta(days=ahead)
+        candidate = datetime.datetime.combine(day, datetime.time(start // 60, start % 60)).timestamp()
+        if candidate > after and day_allowed(task, candidate):
+            return candidate
+    return None
+
+
 def is_due(task: Task, entry: dict, now: float) -> bool:
     if not task.enabled or expired(task, now):
         return False
     last = entry.get("last")
     if task.every:
-        return day_allowed(task, now) and (last is None or now - last >= task.every)
+        return allowed(task, now) and (last is None or now - last >= task.every)
     slot = latest_slot(task, now)
     reference = last if last is not None else entry.get("seen", now)
     return slot is not None and slot > reference
@@ -357,7 +402,7 @@ def next_due(task: Task, entry: dict, now: float) -> float | None:
     if is_due(task, entry, now):
         return now
     if task.every:
-        return (entry.get("last") or now) + task.every
+        return next_allowed(task, (entry.get("last") or now) + task.every)
     return next_slot(task, max(now, entry.get("last") or 0))
 
 
@@ -480,7 +525,9 @@ def locked_tick(config: Config, now: float, dry_run: bool) -> TickReport:
                 if task.notify == "failure":
                     speak = code != 0
                 elif task.notify == "change":
-                    speak = code != 0 or (previous is not None and output != previous)
+                    speak = code != 0 or output != (previous or "")
+                elif task.notify == "output":
+                    speak = code != 0 or bool(output.strip())
                 section.append(f"$ {task.run}  [exit {code}]" + (f"\n{output}" if output else ""))
                 ran.append(f"{task.name} (exit {code})")
         elif not dry_run:

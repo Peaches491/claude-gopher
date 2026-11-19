@@ -83,6 +83,34 @@ def test_at_task_waits_for_its_time_and_catches_up_once(config):
     assert "Post the standup." in schedule.tick(config, at("2026-11-24T09:05:00")).text()
 
 
+def test_hours_keep_an_every_task_inside_its_window(config):
+    (config.schedule_dir / "save.md").unlink()
+    (config.schedule_dir / "update-check.md").unlink()
+    write(config, "monitor", "---\nevery: 1h\ndays: weekdays\nhours: 8-18\n---\nCheck.\n")
+    assert "Check." in schedule.tick(config, at("2026-11-17T17:30:00")).text()
+    assert schedule.tick(config, at("2026-11-17T18:40:00")).sections == []
+    assert schedule.tick(config, at("2026-11-18T02:40:00")).sections == []
+    assert "Check." in schedule.tick(config, at("2026-11-18T08:00:00")).text()
+    task = schedule.parse_task(config.schedule_dir / "monitor.md")
+    assert task.timing() == "every 1h weekdays 08:00-18:00"
+    assert schedule.next_due(task, {"last": at("2026-11-20T17:30:00")}, at("2026-11-20T17:40:00")) == at("2026-11-23T08:00:00")
+
+
+def test_hours_can_wrap_midnight_and_reject_bad_ranges(config):
+    write(config, "night", "---\nevery: 1h\nhours: 22:30-06:00\n---\nCheck.\n")
+    task = schedule.parse_task(config.schedule_dir / "night.md")
+    assert schedule.in_hours(task, at("2026-11-17T23:00:00"))
+    assert schedule.in_hours(task, at("2026-11-18T05:59:00"))
+    assert not schedule.in_hours(task, at("2026-11-18T12:00:00"))
+    for bad in ("8", "8-8", "25-26", "08:75-09"):
+        write(config, "night", f"---\nevery: 1h\nhours: {bad}\n---\nCheck.\n")
+        with pytest.raises(schedule.ScheduleError, match="hours must be"):
+            schedule.parse_task(config.schedule_dir / "night.md")
+    write(config, "night", '---\nat: "09:00"\nhours: 8-18\n---\nCheck.\n')
+    with pytest.raises(schedule.ScheduleError, match="only applies to every"):
+        schedule.parse_task(config.schedule_dir / "night.md")
+
+
 def test_first_sight_of_an_at_task_does_not_fire_a_past_slot(config):
     (config.schedule_dir / "save.md").unlink()
     write(config, "nightly", '---\nat: "00:03"\n---\nCheck.\n')
@@ -241,7 +269,8 @@ def test_notify_modes_keep_routine_runs_quiet(config):
     write(config, "watch", "---\nevery: 1h\nrun: cat state.txt\nnotify: change\n---\nSay what changed.\n")
     (config.root / "state.txt").write_text("v1\n")
     now = at("2026-11-18T10:00:00")
-    assert schedule.tick(config, now).sections == []
+    first = schedule.tick(config, now).text()
+    assert "## watch" in first and "v1" in first and "## save" not in first
     assert schedule.tick(config, now + 3600).sections == []
     (config.root / "state.txt").write_text("v2\n")
     text = schedule.tick(config, now + 7200).text()
@@ -338,3 +367,14 @@ def test_background_tasks_stay_off_next(config):
     assert schedule.heartbeat_compact(config, now + 300) == ("\U0001f552 5m  \u27a1\ufe0f  save in 1h 55m", False)
     write(config, "bad", "---\nevery: 1h\nbackground: maybe\n---\n")
     assert "background must be true or false" in schedule.load_tasks(config)[1]["bad"]
+
+
+def test_notify_output_speaks_only_when_the_command_prints(config):
+    (config.schedule_dir / "update-check.md").unlink()
+    (config.schedule_dir / "save.md").unlink()
+    write(config, "watch", "---\nevery: 1h\nrun: cat found.txt 2>/dev/null; true\nnotify: output\n---\nHandle it.\n")
+    now = at("2026-11-18T10:00:00")
+    assert schedule.tick(config, now).sections == []
+    (config.root / "found.txt").write_text("meeting 1\n")
+    assert "meeting 1" in schedule.tick(config, now + 3600).text()
+    assert "meeting 1" in schedule.tick(config, now + 7200).text()

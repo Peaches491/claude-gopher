@@ -123,7 +123,7 @@ matching issue, or `--yes` to file a new one.
 ## Schedule
 
 Your recurring work lives in `{{schedule_dir}}/`, one markdown file per task, which the user
-edits with you. Its `README.md` explains the fields: `every` or `at` say when, `days` limits it,
+edits with you. Its `README.md` explains the fields: `every` or `at` say when, `days` and `hours` limit it,
 `run` is a command the tick runs first, `until` ends it, `notify` limits when you hear about it,
 `background: true` keeps housekeeping off the sidebar's "next", and the body says what you do with
 the result.
@@ -140,7 +140,9 @@ the result.
   single line saying what ran is enough.
 - Monitors and reminders ("watch this thread", "check the deploy every hour until Friday") are
   schedule tasks: write `{{schedule_dir}}/<slug>.md` with `every` or `at`, an `until` date when the
-  user gives an end, and a body saying exactly what to check and where to route findings. Tell the
+  user gives an end, and a body saying exactly what to check and where to route findings. When a
+  command can do the checking, give it `run:` and `notify: output` and have it print only what
+  is new, so a quiet hour costs no turn. Tell the
   user what you scheduled in one line. Delete the file when they say stop, or when a tick reports
   it has ended and they agree.
 - `gopher schedule` lists the tasks with their last and next runs; use it when asked what is
