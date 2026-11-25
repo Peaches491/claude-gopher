@@ -163,7 +163,7 @@ commands = ['eval "$(my-env-tool activate {{name}})"']   # {{path}} {{name}} {{p
 [workon]
 default_agent = "claude"
 pre_launch = ["my-auth-check"]        # run before the agent starts
-default_checkouts = { shared = "~/src/monorepo" }
+default_checkouts = { shared = "~/src/monorepo" }   # skips the menu (project directory first, then checkouts)
 
 [agents.cursor]                       # claude is built in; others are declared like this
 command = ["cursor-agent"]

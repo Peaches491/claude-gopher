@@ -246,16 +246,16 @@ def cmd_setup(args) -> int:
     ))
 
 
-def workon_target(args, config, ui):
+def workon_target(args, config, ui, switch: bool = False):
     project = workon.resolve_project(config, ui, args.project, os.getcwd())
-    return project, workon.resolve_checkout(config, ui, project, args.checkout, os.getcwd())
+    return project, workon.resolve_checkout(config, ui, project, args.checkout, os.getcwd(), switch=switch)
 
 
 def cmd_workon_source(args) -> int:
     config = root_config(args)
     if not os.environ.get(workon.EVAL_ENV):
         raise workon.WorkonError('source changes your shell; load the shell function first: eval "$(gopher shell-init zsh)"')
-    project, checkout = workon_target(args, config, workon.TtyUI())
+    project, checkout = workon_target(args, config, workon.TtyUI(), switch=True)
     print("\n".join(workon.source_lines(config, project, checkout)))
     return 0
 

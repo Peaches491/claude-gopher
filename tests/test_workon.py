@@ -82,8 +82,10 @@ def test_setup_commands_match_and_render(root, tmp_path):
     lines = workon.source_lines(config, "alpha", tmp_path / "mono" / "feat")
     assert lines[0] == f"cd {tmp_path / 'mono' / 'feat'}"
     assert f"GOPHER_HOME={root}" in lines[1] and "GOPHER_PROJECT=alpha" in lines[1]
-    assert lines[2] == '[ -n "${TMUX_PANE:-}" ] && tmux rename-window -t "$TMUX_PANE" alpha'
-    assert lines[-3:] == ["env-tool activate feat", "echo alpha", "auth-try"]
+    assert lines[2:] == [
+        "env-tool activate feat", "echo alpha", "auth-try",
+        'if [ -n "${TMUX_PANE:-}" ]; then tmux rename-window -t "$TMUX_PANE" alpha; fi',
+    ]
 
 
 def test_resolve_checkout_rules(root, tmp_path):
@@ -101,9 +103,28 @@ def test_resolve_checkout_rules(root, tmp_path):
     assert workon.resolve_checkout(config, FakeUI(), "alpha", "one", str(tmp_path)) == one
     ui = FakeUI(menu=[f"two  ({two})"])
     assert workon.resolve_checkout(config, ui, "alpha", None, str(tmp_path)) == two
-    assert len(ui.prompts[0][1]) == 3
+    assert len(ui.prompts[0][1]) == 4
+    assert ui.prompts[0][1][0] == f"project directory  ({projects / 'alpha'})"
+    assert workon.resolve_checkout(config, FakeUI(menu=[ui.prompts[0][1][0]]), "alpha", None, str(tmp_path)) is None
     with pytest.raises(workon.WorkonError):
         workon.resolve_checkout(config, FakeUI(), "alpha", "missing", str(tmp_path))
+
+
+def test_source_from_a_checkout_offers_the_others(root, tmp_path):
+    config = load_config(root)
+    one, two = git_repo(tmp_path / "one"), git_repo(tmp_path / "two")
+    add_checkout(config.projects_dir, "alpha", one)
+    add_checkout(config.projects_dir, "alpha", two)
+    write_config(root, f'[workon]\ndefault_checkouts = {{ alpha = "{one}" }}\n')
+    config = load_config(root)
+    assert workon.resolve_checkout(config, FakeUI(), "alpha", None, str(two)) == one
+    ui = FakeUI(menu=[f"one  ({one})"])
+    assert workon.resolve_checkout(config, ui, "alpha", None, str(two), switch=True) == one
+    assert ui.prompts[0][1][2] == f"two  ({two})  <- here"
+    ui = FakeUI(menu=[f"two  ({two})"])
+    assert workon.resolve_checkout(config, ui, "alpha", None, str(config.projects_dir / "alpha"), switch=True) == two
+    assert ui.prompts[0][1][0].endswith("<- here")
+    assert workon.resolve_checkout(config, FakeUI(), "alpha", None, str(tmp_path), switch=True) == one
 
 
 def test_default_checkout_wins(root, tmp_path):

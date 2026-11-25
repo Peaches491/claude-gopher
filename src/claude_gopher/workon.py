@@ -207,7 +207,7 @@ def default_checkout(config: Config, project: str) -> Path | None:
     return expand(value) if value else None
 
 
-def resolve_checkout(config: Config, ui, project: str, name: str | None, cwd: str) -> Path | None:
+def resolve_checkout(config: Config, ui, project: str, name: str | None, cwd: str, switch: bool = False) -> Path | None:
     owned = read_checkouts(config.projects_dir / project)
     if name:
         for checkout in owned:
@@ -217,16 +217,19 @@ def resolve_checkout(config: Config, ui, project: str, name: str | None, cwd: st
         if candidate.is_dir():
             return candidate
         raise WorkonError(f"{name!r} is not a checkout of {project}")
-    if default := default_checkout(config, project):
-        return default
     here = here_checkout(config, cwd)
-    if here in owned:
-        return here
+    switching = switch and (here in owned or project_dir_at(config, cwd) == project)
+    if not switching:
+        if default := default_checkout(config, project):
+            return default
+        if here in owned:
+            return here
     existing = [checkout for checkout in owned if checkout.is_dir()]
-    if len(existing) == 1:
-        return existing[0]
     if existing:
-        labels = {f"{c.name}  ({c})": c for c in existing}
+        current = None if project_dir_at(config, cwd) == project else here
+        mark = lambda path: "  <- here" if switching and path == current else ""
+        labels: dict[str, Path | None] = {f"project directory  ({config.projects_dir / project}){mark(None)}": None}
+        labels.update({f"{c.name}  ({c}){mark(c)}": c for c in existing})
         return labels[ui.menu("Choose a checkout", list(labels))]
     if here and offer_link(config, ui, project, here):
         return here
@@ -241,10 +244,10 @@ def source_lines(config: Config, project: str, checkout: Path | None) -> list[st
     lines = [
         f"cd {shlex.quote(str(workdir(config, project, checkout)))}",
         f"export GOPHER_HOME={shlex.quote(str(config.root))} GOPHER_PROJECT={shlex.quote(project)}",
-        f'[ -n "${{TMUX_PANE:-}}" ] && tmux rename-window -t "$TMUX_PANE" {shlex.quote(project)}',
     ]
     lines += setup_commands(config, project, checkout)
     lines += workon_settings(config).get("pre_launch", [])
+    lines.append(f'if [ -n "${{TMUX_PANE:-}}" ]; then tmux rename-window -t "$TMUX_PANE" {shlex.quote(project)}; fi')
     return lines
 
 
