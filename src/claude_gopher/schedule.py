@@ -637,7 +637,7 @@ def deliver(config: Config, now: float) -> bool:
 
 
 def loop_log(message: str) -> None:
-    print(f"{time.strftime('%H:%M')}  {message}", flush=True)
+    print(f"{time.strftime('%Y-%m-%d %H:%M')}  {message}", flush=True)
 
 
 def run_loop(config: Config, interval: int = LOOP_SECONDS, stop=None, clock=time.time, sleep=time.sleep, log=loop_log) -> None:
