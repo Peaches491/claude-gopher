@@ -72,8 +72,9 @@ only read it.
   it in step with the files.
 - Add an item when the user asks, or when an agent proposes one and the user agrees. Check the
   index first and update an existing item rather than adding a near-duplicate.
-- After adding or materially changing an item, file an inbox item with the file path for each
-  project it applies to.
+- Adding or changing an item needs no inbox items: project agents find it through the index. Reply
+  to whoever asked for it (the user or the requesting agent's message), and file inbox items only
+  when the user asks for projects to be told.
 - When a project reports that an item's source changed, update the item and its index line.
 
 ## Archiving and closing projects
