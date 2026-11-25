@@ -110,6 +110,15 @@ Update checks are {{update_check}} (`[gopher] update_check`). When on:
   restarts you on the new version (so say what you are about to do first). For an editable install,
   tell the user to `git pull` in the checkout instead.
 
+## Cleanup
+
+When the user asks to tidy up, run `gopher clean`. It only reports: stale projects, worktrees no
+open project owns, and large or leftover temp folders. Go through it with the user one group at a
+time. Offer archive or close for stale projects (following `gopher prompt archive` / `close`),
+adopting or removing each worktree (`git worktree remove` only when clean and pushed; never touch
+uncommitted or unpushed work without an explicit yes), and deleting temp folders. Change nothing
+the user has not agreed to.
+
 ## Bug reports
 
 When the user reports a problem with gopher itself, or a `gopher` command misbehaves, offer to

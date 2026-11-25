@@ -18,7 +18,7 @@ from claude_gopher.prompt import CONTEXTS, assemble, is_gopher_session, session_
 from claude_gopher.roots import RootError, check_name, check_target, create_project, create_root, register_root
 from claude_gopher.overview import current_sessions, project_overview
 from claude_gopher.setup import SetupIO, launch_interview, run_setup
-from claude_gopher import bugreport, devreload, doctor, launch, lifecycle, popup, rename, restore, rootgit, schedule, update, workon
+from claude_gopher import bugreport, clean, devreload, doctor, launch, lifecycle, popup, rename, restore, rootgit, schedule, update, workon
 from claude_gopher.state import (
     apply_event,
     mark_needs_login,
@@ -724,6 +724,14 @@ def check_line(check) -> str:
     return f"{check.level:<4}  {check.area:<9}  {check.message}"
 
 
+def cmd_clean(args) -> int:
+    now = time.time()
+    large = int(args.min_size * 1024 * 1024)
+    result = clean.report(root_config(args), now, args.days, large)
+    print("\n".join(clean.render(result, now, args.days, large)))
+    return 0
+
+
 def cmd_doctor(args) -> int:
     checks = doctor.run(root_config(args))
     if args.report:
@@ -1025,6 +1033,11 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser.add_argument("--yes", action="store_true", help="with --report: file the issue without asking")
     doctor_parser.add_argument("--comment", type=int, metavar="N", help="with --report: add the report to existing issue N instead")
     doctor_parser.set_defaults(func=cmd_doctor)
+
+    clean_parser = sub.add_parser("clean", help="suggest cleanups: stale projects, worktrees no project owns, large temp folders (changes nothing)")
+    clean_parser.add_argument("--days", type=int, default=clean.STALE_WORKDAYS, help="working days without a STATUS.md update before a project counts as stale")
+    clean_parser.add_argument("--min-size", type=float, default=clean.LARGE_BYTES / 1024 / 1024, metavar="MB", help="temp folders at least this big are listed")
+    clean_parser.set_defaults(func=cmd_clean)
 
     needs_login = sub.add_parser("needs-login", help="mark this agent as blocked on credentials (shows 'needs login'; cleared by the user's next message)")
     needs_login.add_argument("--clear", action="store_true", help="clear the mark now")

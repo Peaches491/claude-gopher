@@ -373,6 +373,13 @@ running, the backup, the schedule loop, and
 checkouts that are missing or owned by two projects without being shared. It exits non-zero on a problem; `-q` shows
 only what needs attention.
 
+`gopher clean` suggests cleanups and changes nothing: projects whose STATUS.md has not moved
+in 15 working days (`--days`), git worktrees of your projects' repositories that no open project
+owns (with their branch, last commit, and any uncommitted or unpushed work), and temp folders
+over 100 MB (`--min-size`) or left over from a project that is gone. Worktrees made outside
+gopher are normal; it lists them so you can adopt one (`gopher checkout add`) or remove it. Ask
+Gopher to tidy up and it walks through the list with you.
+
 To report a bug, run `gopher doctor --report "<title>" --description "<what happened>"`. It drafts
 an issue with the doctor results and your versions (your home directory shown as `~`), and lists
 existing issues that look like a match. It posts only with `--yes` (a new issue) or `--comment N`

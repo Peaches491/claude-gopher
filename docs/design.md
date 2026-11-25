@@ -435,6 +435,19 @@ told: `--yes` files a new issue, `--comment N` adds the report to issue N, and a
 asks. Without `gh` it points at the web form (`.github/ISSUE_TEMPLATE/bug_report.yml`). Gopher's
 prompt has it draft, show the user, and post only on their yes.
 
+### Cleanup (`gopher clean`)
+
+`gopher clean` reports and never changes anything, and it is not part of the doctor: worktrees
+made outside gopher are expected, not a fault. It lists open projects whose STATUS.md `updated`
+is at least `--days` working days old (default 15, with whether an agent is running); worktrees
+of every repository a project checkout belongs to (from `git worktree list` of each main
+checkout) that no open project owns, skipping protected paths and noting archived or closed
+projects that listed them, each with its branch, last commit, uncommitted changes (read-only
+`git --no-optional-locks status --untracked-files=no`, 20 s limit), and commits on no remote,
+or `worktree prune` for a directory that is gone; and folders under `tmp/` of at least
+`--min-size` MB (default 100) or named after no open project. Gopher's prompt has it walk the
+list with the user and act only on a yes.
+
 ### tmux integration
 
 The tmux config ships in the package (`gopher shell-init tmux --path`); users add
