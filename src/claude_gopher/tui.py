@@ -1297,7 +1297,7 @@ class GopherTUI(App):
             self.notify(str(error), severity="warning")
 
     def action_gopher(self) -> None:
-        project = self.selected() or self.pinned_project()
+        project = self.target_project()
         self.open_popup("gopher", None, f"[project: {project['name']}] " if project else "")
 
     def action_agent(self) -> None:
@@ -1325,7 +1325,7 @@ class GopherTUI(App):
             self.notify(f"Proactivity: {level} (Gopher not running; applies at next launch)")
 
     def action_mark_seen(self) -> None:
-        if project := self.selected() or self.pinned_project():
+        if project := self.target_project():
             done = [s["session_id"] for s in project["sessions"] if s.get("attention") == DONE]
             if done:
                 self.acks.ack(done)
@@ -1414,7 +1414,7 @@ class GopherTUI(App):
         )
 
     def action_summarize(self) -> None:
-        if project := self.selected() or self.pinned_project():
+        if project := self.target_project():
             self.notify(f"Summarizing {project['name']}...")
             self.run_worker(lambda: self.refresh_summary(project), thread=True, group="summary")
 
