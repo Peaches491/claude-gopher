@@ -107,6 +107,18 @@ def visible_prs(prs: list[Resource], now: float | None = None) -> list[tuple[Res
     return out
 
 
+TODO_FILE = Path("plan") / "todo.md"
+TODO_LINE = re.compile(r"^\s*[-*]\s+\[([ xX])\]\s+(.*\S)")
+
+
+def open_todos(project_dir: Path) -> list[str]:
+    try:
+        text = (project_dir / TODO_FILE).read_text()
+    except OSError:
+        return []
+    return [match.group(2) for line in text.splitlines() if (match := TODO_LINE.match(line)) and match.group(1) == " "]
+
+
 def open_tickets(tickets: list[Resource]) -> list[Resource]:
     return [ticket for ticket in tickets if not ticket.closed]
 
@@ -201,6 +213,7 @@ def project_overview(config: Config, sessions: list[dict] | None = None) -> list
             "items": [item.path.name for item in items],
         }
         project["links"] = resource_links(project_dir)
+        project["todos"] = open_todos(project_dir)
         project["resources"] = {
             "prs": len(visible_prs(project["links"]["prs"])),
             "tickets": len(open_tickets(project["links"]["tickets"])),

@@ -28,6 +28,8 @@ files loose in the project root.
 Rules of thumb:
 - If losing it only costs a rerun, it belongs in tmp. If a note or plan refers to it by name and it
   cannot be regenerated, it belongs in `data/`.
+- Keep the project's to-do list in `plan/todo.md` as `- [ ] item` lines (`- [x]` when done), one
+  short line each with details further down; the sidebar shows the open ones.
 - If it says what you intend to do, it is `plan/`. If it records what happened, it is `notes/`.
 - Update a note freely in the session that wrote it. In later sessions, correct or delete a note
   only when it is clearly wrong, and say what changed and why. Do not rewrite an accurate record

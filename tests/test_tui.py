@@ -796,3 +796,15 @@ def test_health_text_caps_the_problem_lines():
     assert lines[0] == "gopher \u25cb idle" and len(lines) == 4
     assert lines[-1] == "+3 more: gopher doctor (D dismisses)"
     assert str(tui.health_text(None, [], 80)) == "gopher not running"
+
+def test_open_todos_feed_the_pinned_header(tmp_path):
+    (tmp_path / "plan").mkdir()
+    (tmp_path / "plan" / "todo.md").write_text("# To-do\n\n- [ ] first\n- [x] done\n  * [ ] nested\nnot a task\n- [ ]\n")
+    assert overview.open_todos(tmp_path) == ["first", "nested"]
+    assert overview.open_todos(tmp_path / "missing") == []
+    row = {"todos": [f"t{i}" for i in range(7)]}
+    text = tui.todos_text(row).plain
+    assert text.startswith("\nto-do (7)") and "t4" in text and "t5" not in text and "+2 more" in text
+    assert "t6" in tui.todos_text(row, limit=None).plain
+    assert tui.todos_text({"todos": []}).plain == ""
+

@@ -141,6 +141,7 @@ projects/<name>/
   STATUS.md        the agent's view: frontmatter (summary, state, updated) and where things stand
   human/           yours; agents read it and never write it (Gopher may, on your behalf)
   plan/ notes/     living plans; dated records of what happened
+  plan/todo.md     open to-dos as "- [ ] item" lines; the sidebar's pinned header lists them
   resources/       one file per PR, ticket, doc, or dashboard the project uses
   inbox/           items for the project's agent; handled ones move to inbox/read/
   checkouts.toml   the git checkouts this project owns

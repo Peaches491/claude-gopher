@@ -333,7 +333,8 @@ window name; `--project` overrides). Without one it is the full dashboard. It po
 seconds.
 
 - **Pinned header**: name, state, summary and cached Haiku line, each agent's state and name,
-  unread inbox count, PR and ticket links, checkouts, and a row of buttons: custom actions
+  unread inbox count, PR and ticket links, checkouts, the open `- [ ]` items of `plan/todo.md`
+  (first 5, then "+N more"; all of them in the detail view), and a row of buttons: custom actions
   (`[[tui.actions]]`, run in a tmux popup in the first matching checkout), `b` Inbox, `n` Note,
   `u` Refresh (asks the agent beside it to refresh STATUS.md), `e` Human (edits
   `human/STATUS.md` in a popup), and `.` More.

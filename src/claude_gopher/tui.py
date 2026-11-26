@@ -359,6 +359,7 @@ def detail_header(project: dict, cached: str | None) -> Text:
             text.append_text(resource_list(kind, items))
     for checkout in project["checkouts"]:
         text.append(f"\ncheckout {checkout}", style="dim")
+    text.append_text(todos_text(project, limit=None))
     return text
 
 
@@ -391,6 +392,23 @@ def checkouts_text(project: dict) -> Text:
     return text
 
 
+PINNED_TODOS = 5
+
+
+def todos_text(project: dict, limit: int | None = PINNED_TODOS) -> Text:
+    text = Text()
+    todos = project.get("todos") or []
+    if not todos:
+        return text
+    text.append(f"\nto-do ({len(todos)})", style="bold")
+    for item in todos[:limit]:
+        text.append("\n  \u25a1 ", style="dim")
+        text.append(item)
+    if limit is not None and len(todos) > limit:
+        text.append(f"\n  +{len(todos) - limit} more in plan/todo.md", style="dim")
+    return text
+
+
 def pinned_parts(project: dict, cached: str | None) -> dict[str, Text]:
     body = Text(project["summary"] or "(no summary)")
     if cached:
@@ -400,6 +418,7 @@ def pinned_parts(project: dict, cached: str | None) -> dict[str, Text]:
         body.append_text(state_text(effective_state(session) or "?"))
         body.append(f"  {session.get('name') or '?'}", style="dim")
     body.append_text(checkouts_text(project))
+    body.append_text(todos_text(project))
     return {
         "name": title_text(project),
         "pstate": project_state_text(project),
