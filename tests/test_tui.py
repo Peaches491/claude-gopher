@@ -376,14 +376,18 @@ def test_links_text_collapses_stacks_and_hides_closed():
             overview.Resource("9", "https://forge/pull/9", state="merged", merged=now - 3600),
             overview.Resource("8", None, state="merged", merged=now - 90_000),
             overview.Resource("7", None, state="closed"),
+            overview.Resource("6", "https://forge/pull/6", state="closed", closed_at=now - 3600),
+            overview.Resource("5", None, state="closed", closed_at=now - 90_000),
         ],
         "tickets": [overview.Resource("ABC-1", "https://jira/ABC-1"), overview.Resource("ABC-2", None, state="resolved")],
     }
     text = tui.links_text(links, now)
-    assert text.plain == "#12(3) \u2714#9 ABC-1"
+    assert text.plain == "#12(3) \u2714#9 #6 ABC-1"
     assert [span.style.link for span in text.spans if getattr(span.style, "link", None)] == [
-        "https://forge/pull/12", "https://forge/pull/9", "https://jira/ABC-1",
+        "https://forge/pull/12", "https://forge/pull/9", "https://forge/pull/6", "https://jira/ABC-1",
     ]
+    struck = [text.plain[span.start:span.end] for span in text.spans if getattr(span.style, "strike", False)]
+    assert struck == ["#6"]
 
 
 def test_resource_links_reads_frontmatter(config):
@@ -391,11 +395,14 @@ def test_resource_links_reads_frontmatter(config):
     prs.mkdir(parents=True)
     (prs / "601.md").write_text("---\nstate: merged\nmerged: 2026-11-12\nstack: #600, #601\n---\n# [Fix it](https://forge/pull/601)\n\nbody\n")
     (prs / "602.md").write_text("# no link\n")
+    (prs / "603.md").write_text("---\nstate: closed  # abandoned\nclosed: 2026-11-14T09:30\n---\n# [Old](https://forge/pull/603)\n")
     links = overview.resource_links(config.projects_dir / "alpha")["prs"]
     assert [(r.name, r.url, r.state, r.stack) for r in links] == [
+        ("603", "https://forge/pull/603", "closed", ()),
         ("602", None, "open", ()), ("601", "https://forge/pull/601", "merged", ("600", "601")),
     ]
-    assert links[1].merged == overview.parse_when("2026-11-13T00:00")
+    assert links[0].closed_at == overview.parse_when("2026-11-14T09:30")
+    assert links[2].merged == overview.parse_when("2026-11-13T00:00")
 
 
 def test_attention_done_until_acked_and_creds():

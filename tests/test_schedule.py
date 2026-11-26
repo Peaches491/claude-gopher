@@ -5,7 +5,7 @@ import subprocess
 
 import pytest
 
-from claude_gopher import schedule
+from claude_gopher import doctor, schedule
 from claude_gopher.cli import main
 from claude_gopher.config import load_config
 from claude_gopher.roots import create_project, create_root
@@ -378,3 +378,17 @@ def test_notify_output_speaks_only_when_the_command_prints(config):
     (config.root / "found.txt").write_text("meeting 1\n")
     assert "meeting 1" in schedule.tick(config, now + 3600).text()
     assert "meeting 1" in schedule.tick(config, now + 7200).text()
+
+
+def test_doctor_names_missing_builtin_tasks_and_add_default_writes_them(config, monkeypatch, capsys):
+    monkeypatch.setattr(schedule, "have_gh", lambda: True)
+    assert [task.name for task in schedule.missing_defaults(config)] == ["pr-sync"]
+    warnings = [c.message for c in doctor.check_schedule(config, at("2026-11-17T10:00")) if "built-in" in c.message]
+    assert warnings == ["built-in task pr-sync (mark merged and closed PRs in project resources (gh)) is not in schedule/; add it with gopher schedule add-default pr-sync"]
+    assert main(["--root", str(config.root), "schedule", "add-default", "nope"]) == 1
+    assert main(["--root", str(config.root), "schedule", "add-default"]) == 0
+    assert "added" in capsys.readouterr().out
+    assert schedule.missing_defaults(config) == []
+    assert {t.name: t.notify for t in schedule.load_tasks(config)[0]}["pr-sync"] == "failure"
+    assert main(["--root", str(config.root), "schedule", "add-default"]) == 0
+    assert "no built-in tasks missing" in capsys.readouterr().out

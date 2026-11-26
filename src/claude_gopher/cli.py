@@ -18,7 +18,7 @@ from claude_gopher.prompt import CONTEXTS, assemble, is_gopher_session, session_
 from claude_gopher.roots import RootError, check_name, check_target, create_project, create_root, register_root
 from claude_gopher.overview import current_sessions, project_overview
 from claude_gopher.setup import SetupIO, launch_interview, run_setup
-from claude_gopher import bugreport, clean, devreload, doctor, launch, lifecycle, popup, rename, restore, rootgit, schedule, update, workon
+from claude_gopher import bugreport, clean, devreload, doctor, launch, lifecycle, popup, prsync, rename, restore, rootgit, schedule, update, workon
 from claude_gopher.state import (
     apply_event,
     mark_needs_login,
@@ -572,6 +572,15 @@ def when(timestamp: float | None, now: float) -> str:
     return f"in {schedule.format_seconds(timestamp - now)}"
 
 
+def cmd_schedule_add_default(args) -> int:
+    written = schedule.add_defaults(root_config(args), args.names)
+    for path in written:
+        print(f"added {path}")
+    if not written:
+        print("no built-in tasks missing")
+    return 0
+
+
 def cmd_schedule_list(args) -> int:
     config = root_config(args)
     now = time.time()
@@ -584,9 +593,10 @@ def cmd_schedule_list(args) -> int:
         timing = max(len(row.timing) for row in rows)
         lasts = max(4, *(len(last) for _, last, _ in table))
         nexts = max(4, *(len(upcoming) for _, _, upcoming in table))
-        print(f"{'TASK':<{width}}  {'WHEN':<{timing}}  {'LAST':<{lasts}}  {'NEXT':<{nexts}}  RUN")
+        tells = max(len("GOPHER"), *(len(row.tells) for row in rows))
+        print(f"{'TASK':<{width}}  {'WHEN':<{timing}}  {'LAST':<{lasts}}  {'NEXT':<{nexts}}  {'GOPHER':<{tells}}  RUN")
         for row, last, upcoming in table:
-            line = f"{row.name:<{width}}  {row.timing:<{timing}}  {last:<{lasts}}  {upcoming:<{nexts}}  {row.run or '-'}"
+            line = f"{row.name:<{width}}  {row.timing:<{timing}}  {last:<{lasts}}  {upcoming:<{nexts}}  {row.tells:<{tells}}  {row.run or '-'}"
             print(line + (f"  ({row.note})" if row.note else ""))
     for name, problem in problems.items():
         print(f"{name}: {problem}", file=sys.stderr)
@@ -730,6 +740,19 @@ def cmd_clean(args) -> int:
     result = clean.report(root_config(args), now, args.days, large)
     print("\n".join(clean.render(result, now, args.days, large)))
     return 0
+
+
+def cmd_prs_sync(args) -> int:
+    try:
+        changes, errors = prsync.sync(root_config(args), dry_run=args.dry_run)
+    except prsync.SyncError as error:
+        print(f"gopher prs sync: {error}", file=sys.stderr)
+        return 1
+    for change in changes:
+        print(f"{change.project}: {change.describe()}" + (" (dry run)" if args.dry_run else ""))
+    for error in errors:
+        print(error, file=sys.stderr)
+    return 1 if errors else 0
 
 
 def cmd_doctor(args) -> int:
@@ -915,6 +938,9 @@ def build_parser() -> argparse.ArgumentParser:
     schedule_run = schedule_sub.add_parser("run", help="the background loop gopher launch starts: tick, then tell Gopher only when there is output")
     schedule_run.add_argument("--interval", default="10m", help="time between ticks (default 10m)")
     schedule_run.set_defaults(func=cmd_schedule_run)
+    schedule_add = schedule_sub.add_parser("add-default", help="write built-in tasks missing from schedule/ (all of them, or the ones named)")
+    schedule_add.add_argument("names", nargs="*", metavar="NAME")
+    schedule_add.set_defaults(func=cmd_schedule_add_default)
     schedule_sub.add_parser("report", help="print and clear the schedule output waiting for Gopher").set_defaults(func=cmd_schedule_report)
 
     project = sub.add_parser("project", help="manage projects").add_subparsers(dest="project_command", required=True)
@@ -1034,6 +1060,11 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser.add_argument("--comment", type=int, metavar="N", help="with --report: add the report to existing issue N instead")
     doctor_parser.set_defaults(func=cmd_doctor)
 
+    prs = sub.add_parser("prs", help="pull requests in project resources").add_subparsers(dest="prs_command", required=True)
+    prs_sync = prs.add_parser("sync", help="ask gh for each open or draft PR in resources/prs/, update its state, and file an inbox item per changed project")
+    prs_sync.add_argument("--dry-run", action="store_true", help="print the changes without writing anything")
+    prs_sync.set_defaults(func=cmd_prs_sync)
+
     clean_parser = sub.add_parser("clean", help="suggest cleanups: stale projects, worktrees no project owns, large temp folders (changes nothing)")
     clean_parser.add_argument("--days", type=int, default=clean.STALE_WORKDAYS, help="working days without a STATUS.md update before a project counts as stale")
     clean_parser.add_argument("--min-size", type=float, default=clean.LARGE_BYTES / 1024 / 1024, metavar="MB", help="temp folders at least this big are listed")
@@ -1078,7 +1109,7 @@ def main(argv: list[str] | None = None) -> int:
     except subprocess.CalledProcessError as error:
         print(f"gopher: {' '.join(error.cmd)} failed: {(error.stderr or '').strip()}", file=sys.stderr)
         return 1
-    except (ConfigError, RootError, FileNotFoundError, workon.WorkonError, bugreport.BugReportError) as error:
+    except (ConfigError, RootError, FileNotFoundError, workon.WorkonError, bugreport.BugReportError, schedule.ScheduleError) as error:
         print(f"gopher: {error}", file=sys.stderr)
         return 1
 

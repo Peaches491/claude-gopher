@@ -347,10 +347,12 @@ Read the release thread and route any bug reports to the api-v2-migration inbox.
 ```
 
 `run: <command>` makes the tick run a command first and hand Gopher its output. New roots start
-with `save.md` (`gopher save` every two hours) and `update-check.md` (nightly at 00:03):
+with `save.md` (`gopher save` every two hours), `update-check.md` (nightly at 00:03), and, when
+the GitHub CLI is installed, `pr-sync.md` (`gopher prs sync` hourly, 08:00-20:00 on weekdays):
 `gopher new` and `gopher setup` show them and ask whether to keep, retime, or drop each, and
 what else to add (`--default-schedule` skips the questions). The setup interview reviews the
-schedule too.
+schedule too. A root made before a built-in task existed does not get it on upgrade: `gopher
+doctor` names it, and `gopher schedule add-default [NAME]` writes it.
 
 The schedule runs outside Claude: `gopher launch` starts `gopher schedule run` in a hidden window
 of the gopher tmux session, which ticks every ten minutes, runs what is due, and reports events
@@ -359,11 +361,23 @@ working days). Routine runs stay silent: `notify: failure` (the default for `sav
 when the command fails, `notify: change` (for `update-check`) only when its answer changes, and
 `notify: output` only when the command prints something, which suits monitors that print what
 they found.
-`background: true` (the default for both) keeps a housekeeping task off the sidebar's "next".
+`background: true` (the default for all three) keeps a housekeeping task off the sidebar's "next".
 When a tick has something for Gopher, the loop types one line into Gopher's pane once Gopher is
 idle with an empty input line, or attaches it to your next message to Gopher. `gopher schedule`
-lists the tasks with their last and next runs; the clock on the sidebar's bottom line turns
+lists the tasks with their last and next runs and when each reaches Gopher (`on failure`, `on
+change`, `on output`, `every run`, or `prompt` for a task without a command); the clock on the sidebar's bottom line turns
 yellow after half an hour without a tick.
+
+## Pull request states
+
+The sidebar shows a project's open pull requests from the `state:` frontmatter of its
+`resources/prs/` files. For a day after the `merged:` or `closed:` time it shows a merged PR with
+a check mark and a closed one crossed out, then hides them; without a time they are hidden.
+`gopher prs sync` keeps those states true: it asks `gh pr view` about every open or draft PR in
+an open project (any GitHub or GitHub Enterprise host `gh` is logged into), writes `state:` and
+`merged:` or `closed:` (the host's time), and files one inbox item per changed project, such as "PR status update: #1490 merged
+2026-11-25 14:02". `--dry-run` prints the changes only. The `pr-sync` schedule task runs it with
+`notify: failure`, so Gopher hears only when a lookup fails, for example an expired `gh` login.
 
 ## Health check
 

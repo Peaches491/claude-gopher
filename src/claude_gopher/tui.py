@@ -129,12 +129,12 @@ def link(label: str, url: str | None, style: str = "") -> Text:
 
 def links_text(links: dict[str, list[Resource]], now: float | None = None) -> Text:
     text = Text()
-    for pr, count, merged in visible_prs(links.get("prs", []), now):
+    for pr, count, ended in visible_prs(links.get("prs", []), now):
         if text:
             text.append(" ")
-        if merged:
+        if ended == "merged":
             text.append(f"{DONE_ICON}", style="green")
-        text.append_text(link(f"#{pr.name}", pr.url))
+        text.append_text(link(f"#{pr.name}", pr.url, "strike dim red" if ended == "closed" else ""))
         if count > 1:
             text.append(f"({count})", style="dim")
     for ticket in open_tickets(links.get("tickets", [])):

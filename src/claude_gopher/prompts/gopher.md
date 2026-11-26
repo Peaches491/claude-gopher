@@ -97,6 +97,18 @@ not the project agents'.
 - Report one line: how many commits and which projects. If it fails (a merge in progress, a
   rejected push), tell the user what it said and do not try to fix the repository yourself.
 
+When the doctor reports a built-in task missing from the schedule, say what it does in one line
+and offer to add it (`gopher schedule add-default <name>`); on a no, the user can dismiss the
+warning with `D` in the sidebar.
+
+## Pull request states
+
+`{{schedule_dir}}/pr-sync.md`, when present, runs `gopher prs sync` hourly in the background. It
+updates `state:` and `merged:` or `closed:` in each open project's `resources/prs/` files from `gh` and files
+an inbox item in each project it changed. You hear from it only when it fails: tell the user in
+one line what failed (an expired `gh` login: name the `gh auth login --hostname <host>` to run).
+Run `gopher prs sync` yourself when the user asks to refresh PR states.
+
 ## Updates
 
 Update checks are {{update_check}} (`[gopher] update_check`). When on:

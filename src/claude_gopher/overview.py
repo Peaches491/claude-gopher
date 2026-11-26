@@ -31,7 +31,7 @@ def current_sessions(config: Config, prune: bool = True) -> list[dict]:
 
 
 CLOSED_STATES = {"closed", "resolved", "done", "merged", "abandoned"}
-RECENT_MERGE_SECONDS = 24 * 3600
+RECENT_SECONDS = 24 * 3600
 
 
 @dataclass(frozen=True)
@@ -40,6 +40,7 @@ class Resource:
     url: str | None
     state: str = "open"
     merged: float | None = None
+    closed_at: float | None = None
     stack: tuple[str, ...] = ()
 
     @property
@@ -67,8 +68,9 @@ def read_resource(path: Path) -> Resource:
     return Resource(
         name=path.stem,
         url=match.group(1) if match else None,
-        state=(fields.get("state") or "open").lower(),
+        state=(fields.get("state") or "open").split(" #")[0].strip().lower() or "open",
         merged=parse_when(fields["merged"]) if fields.get("merged") else None,
+        closed_at=parse_when(fields["closed"]) if fields.get("closed") else None,
         stack=tuple(fields.get("stack", "").replace(",", " ").replace("#", "").split()),
     )
 
@@ -82,9 +84,14 @@ def resource_links(project_dir: Path) -> dict[str, list[Resource]]:
     return links
 
 
-def visible_prs(prs: list[Resource], now: float | None = None) -> list[tuple[Resource, int, bool]]:
+def recent_end(pr: Resource, now: float) -> str | None:
+    when = pr.merged if pr.state == "merged" else pr.closed_at if pr.state == "closed" else None
+    return pr.state if when is not None and now - when < RECENT_SECONDS else None
+
+
+def visible_prs(prs: list[Resource], now: float | None = None) -> list[tuple[Resource, int, str | None]]:
     now = time.time() if now is None else now
-    recent = lambda pr: pr.state == "merged" and pr.merged is not None and now - pr.merged < RECENT_MERGE_SECONDS
+    recent = lambda pr: recent_end(pr, now)
     shown = [pr for pr in prs if not pr.closed or recent(pr)]
     out, stacks_done = [], set()
     for pr in shown:

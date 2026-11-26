@@ -3,6 +3,7 @@ import fcntl
 import json
 import os
 import re
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -52,8 +53,8 @@ Frontmatter fields:
 - `until: YYYY-MM-DD`: last day to run; afterwards the tick reports it once so Gopher can remove it.
 - `notify: failure` / `change` / `output`: tell Gopher only when `run` fails, when its output
   differs from the previous run, or when it prints anything (default `always`).
-- `background: true`: housekeeping; keep it off the sidebar's "next" (gopher's own `save` and
-  `update-check` default to this).
+- `background: true`: housekeeping; keep it off the sidebar's "next" (gopher's own `save`,
+  `update-check`, and `pr-sync` default to this).
 - `enabled: false`: keep the file but skip it.
 
 The body is plain instructions for Gopher. A task without `run` is just a reminder: Gopher does
@@ -70,10 +71,17 @@ UPDATE_BODY = (
     "in one line at the next briefing or the next time they talk to you, with the release notes link.\n"
     "Mention a given version once. Install only when the user says so."
 )
+PR_SYNC_BODY = (
+    "The PR sync failed: tell the user in one line what failed. For an expired or missing gh login,\n"
+    "name the `gh auth login --hostname <host>` to run. For a PR that no longer resolves, ask whether\n"
+    "to mark its resource file closed. Do not edit the resource files yourself otherwise."
+)
 DEFAULT_UPDATE_AT = "00:03"
+DEFAULT_PR_SYNC = ("1h weekdays", "8-20")
 BUILTIN_DEFAULTS = {
     "save": {"notify": "failure", "background": True},
     "update-check": {"notify": "change", "background": True},
+    "pr-sync": {"notify": "failure", "background": True},
 }
 
 
@@ -86,6 +94,7 @@ class Default:
     purpose: str
     notify: str = "always"
     background: bool = False
+    hours: str | None = None
 
 
 def timing_lines(when: str) -> list[str]:
@@ -111,11 +120,18 @@ def timing_lines(when: str) -> list[str]:
     return lines
 
 
-def task_text(when: str, body: str, run: str | None = None, notify: str = "always", background: bool = False) -> str:
-    extra = ([f"run: {run}"] if run else []) + ([f"notify: {notify}"] if notify != "always" else [])
+def task_text(when: str, body: str, run: str | None = None, notify: str = "always", background: bool = False, hours: str | None = None) -> str:
+    if hours:
+        parse_hours(hours)
+    extra = ([f"hours: {hours}"] if hours and DURATION.match(when.split()[0]) else [])
+    extra += ([f"run: {run}"] if run else []) + ([f"notify: {notify}"] if notify != "always" else [])
     extra += ["background: true"] if background else []
     lines = ["---", *timing_lines(when), *extra, "---", body.strip(), ""]
     return "\n".join(lines)
+
+
+def have_gh() -> bool:
+    return shutil.which("gh") is not None
 
 
 def defaults(config: Config) -> list[Default]:
@@ -129,18 +145,44 @@ def defaults(config: Config) -> list[Default]:
         tasks.append(Default("save", f"{hours}h", "gopher save", SAVE_BODY, "commit and push the root (gopher save)", **BUILTIN_DEFAULTS["save"]))
     if check_updates:
         tasks.append(Default("update-check", DEFAULT_UPDATE_AT, "gopher update --check", UPDATE_BODY, "check for a new gopher release", **BUILTIN_DEFAULTS["update-check"]))
+    if have_gh():
+        when, hours = DEFAULT_PR_SYNC
+        tasks.append(Default("pr-sync", when, "gopher prs sync", PR_SYNC_BODY, "mark merged and closed PRs in project resources (gh)", hours=hours, **BUILTIN_DEFAULTS["pr-sync"]))
     return tasks
 
 
 def default_files(config: Config) -> dict[str, str]:
-    return {task.name: task_text(task.when, task.body, task.run, task.notify, task.background) for task in defaults(config)}
+    return {task.name: task_text(task.when, task.body, task.run, task.notify, task.background, task.hours) for task in defaults(config)}
+
+
+def missing_defaults(config: Config) -> list[Default]:
+    directory = schedule_dir(config)
+    if not directory.is_dir():
+        return []
+    return [task for task in defaults(config) if not (directory / f"{task.name}.md").exists()]
+
+
+def add_defaults(config: Config, names: list[str]) -> list[Path]:
+    missing = {task.name: task for task in missing_defaults(config)}
+    known = {task.name for task in defaults(config)}
+    unknown = [name for name in names if name not in known]
+    if unknown:
+        raise ScheduleError(f"no built-in task {', '.join(unknown)}; built-ins here: {', '.join(sorted(known)) or 'none'}")
+    written = []
+    for name in names or list(missing):
+        if name in missing:
+            task = missing[name]
+            path = schedule_dir(config) / f"{name}.md"
+            path.write_text(task_text(task.when, task.body, task.run, task.notify, task.background, task.hours))
+            written.append(path)
+    return written
 
 
 def interview(config: Config, ask, say) -> dict[str, str]:
     say("Gopher's schedule: recurring work run in the background, one file per task in schedule/.")
     files = {}
     for task in defaults(config):
-        say(f"  {task.name}: {task.purpose}, {'every ' if DURATION.match(task.when) else 'daily at '}{task.when}")
+        say(f"  {task.name}: {task.purpose}, {'every ' if DURATION.match(task.when) else 'daily at '}{task.when}" + (f" {task.hours}" if task.hours else ""))
     for task in defaults(config):
         while True:
             answer = ask(f"Keep {task.name}? y, n, or a new time ({'e.g. 4h' if DURATION.match(task.when) else 'e.g. 06:30'})", "y").strip()
@@ -148,7 +190,7 @@ def interview(config: Config, ask, say) -> dict[str, str]:
                 break
             when = task.when if answer.lower() in ("y", "yes", "") else answer
             try:
-                files[task.name] = task_text(when, task.body, task.run, task.notify, task.background)
+                files[task.name] = task_text(when, task.body, task.run, task.notify, task.background, task.hours)
                 break
             except ScheduleError as error:
                 say(str(error))
@@ -672,6 +714,13 @@ class Row:
     run: str | None
     note: str = ""
     background: bool = False
+    notify: str = "always"
+
+    @property
+    def tells(self) -> str:
+        if not self.run:
+            return "prompt"
+        return {"always": "every run", "failure": "on failure", "change": "on change", "output": "on output"}[self.notify]
 
 
 def listing(config: Config, now: float | None = None) -> tuple[list[Row], dict[str, str]]:
@@ -684,7 +733,7 @@ def listing(config: Config, now: float | None = None) -> tuple[list[Row], dict[s
         note = "disabled" if not task.enabled else f"ended {task.until}" if expired(task, now) else ""
         if entry.get("exit"):
             note = (note + f" last exit {entry['exit']}").strip()
-        rows.append(Row(task.name, task.timing(), entry.get("last"), next_due(task, entry, now), task.run, note, task.background))
+        rows.append(Row(task.name, task.timing(), entry.get("last"), next_due(task, entry, now), task.run, note, task.background, task.notify))
     return rows, problems
 
 

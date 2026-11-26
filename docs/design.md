@@ -292,10 +292,15 @@ die with the session, and expire after 7 days):
   date), `enabled`, `notify` (`always`, the default; `failure`: only when `run` fails; `change`:
   only when its output differs from the previous run, the first run counting as a change; `output`: only when it prints something),
   `background` (`true` keeps it off the sidebar's "next"); the body tells Gopher what to do with
-  the result. Defaults: `save` (every `save_every_hours`, runs `gopher save`, `notify: failure`)
-  and `update-check` (00:03, runs `gopher update --check`, `notify: change`), both
-  `background: true`; those two names keep their `notify` and `background` defaults when a file
-  omits the fields.
+  the result. Defaults: `save` (every `save_every_hours`, runs `gopher save`, `notify: failure`),
+  `update-check` (00:03, runs `gopher update --check`, `notify: change`), and, when `gh` is on
+  the PATH, `pr-sync` (every 1h on weekdays, `hours: 8-20`, runs `gopher prs sync`,
+  `notify: failure`), all `background: true`; those names keep their `notify` and `background`
+  defaults when a file omits the fields. `gopher schedule list` has a GOPHER column saying when
+  each task reaches Gopher (`on failure`, `on change`, `on output`, `every run`, or `prompt` for a
+  task without `run`).
+- `gopher schedule add-default [NAME...]` writes built-in tasks whose file is missing (a root made
+  before the task existed); the doctor warns about each missing one until it is added or dismissed.
 - `gopher schedule tick` (under a lock) runs each due task's command in the root, records runs in
   `<state_dir>/schedule.json`, and prints a section per due task: output, then instructions. It
   adds events: the backup newly overdue, and at the proactive level projects whose STATUS has
@@ -336,8 +341,9 @@ seconds.
   "Projects". The left bar is coloured by urgency: yellow (an agent needs input, or
   `waiting-review`), red (needs login, or `blocked`), green (`active`), grey otherwise, and grey
   for any project without an open window. Within a colour: most urgent agent first, then most
-  recent. Resource links hide closed tickets and PRs, show merged PRs for a day, and collapse a
-  PR stack to its top PR.
+  recent. Resource links hide closed tickets; a PR stays for a day after its `merged:` (with a
+  check mark) or `closed:` time (crossed out) and is hidden after that or without one; a PR
+  stack collapses to its top PR.
 - **Bottom line**: the backup (💾 age since the last save, unsaved changes as `(+lines -lines
   ~files)` in green, red, and yellow, ⇡ unpushed commits, ✓ when clean) and the schedule (🕒 age of the last tick, ➡️ the
   next custom task due; the built-in `save` and `update-check` are left out). The backup turns yellow when a save is overdue and red without a repository or
@@ -434,6 +440,17 @@ and the doctor lines, with the home directory replaced by `~`. It searches exist
 told: `--yes` files a new issue, `--comment N` adds the report to issue N, and at a terminal it
 asks. Without `gh` it points at the web form (`.github/ISSUE_TEMPLATE/bug_report.yml`). Gopher's
 prompt has it draft, show the user, and post only on their yes.
+
+### Pull request sync (`gopher prs sync`)
+
+For each open project's `resources/prs/*.md` whose `state` is `open` or `draft` (missing counts
+as open; a trailing `# comment` is ignored) and whose heading link is a `/pull/N` URL, it runs
+`gh pr view <url> --json state,isDraft,mergedAt,closedAt` (8 at a time, 30 s each). A changed state is
+written in place: `state:` is replaced or added, `merged:` or `closed:` set to the host's merge or close time in local time
+(`YYYY-MM-DDTHH:MM`), other frontmatter lines kept, and frontmatter added to a file
+without any. Each project with changes gets one inbox item from `gopher` (not wake) listing them.
+A lookup that fails is printed to stderr and makes the exit status 1, as does a missing `gh`;
+other PRs are still updated. `--dry-run` prints the changes and writes nothing.
 
 ### Cleanup (`gopher clean`)
 

@@ -100,6 +100,8 @@ def check_schedule(config: Config, now: float) -> list[Check]:
         if entry.get("exit"):
             lines = [line for line in (entry.get("output") or "").splitlines() if line.strip()]
             checks.append(Check(WARN, "schedule", f"{row.name} failed (exit {entry['exit']})" + (f": {lines[-1].strip()}" if lines else "")))
+    for task in schedule.missing_defaults(config):
+        checks.append(Check(WARN, "schedule", f"built-in task {task.name} ({task.purpose}) is not in schedule/; add it with gopher schedule add-default {task.name}"))
     last = schedule.load_state(config).get("last_tick")
     if not last:
         checks.append(Check(WARN, "heartbeat", "no tick yet; gopher launch starts the background schedule loop"))
