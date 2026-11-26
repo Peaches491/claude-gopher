@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import os
+import subprocess
 import time
 from pathlib import Path
 
@@ -797,6 +798,7 @@ def test_health_text_caps_the_problem_lines():
     assert lines[-1] == "+3 more: gopher doctor (D dismisses)"
     assert str(tui.health_text(None, [], 80)) == "gopher not running"
 
+
 def test_open_todos_feed_the_pinned_header(tmp_path):
     (tmp_path / "plan").mkdir()
     (tmp_path / "plan" / "todo.md").write_text("# To-do\n\n- [ ] first\n- [x] done\n  * [ ] nested\nnot a task\n- [ ]\n")
@@ -808,3 +810,8 @@ def test_open_todos_feed_the_pinned_header(tmp_path):
     assert "t6" in tui.todos_text(row, limit=None).plain
     assert tui.todos_text({"todos": []}).plain == ""
 
+
+def test_focused_panes_skip_clients_with_a_gopher_popup_open(monkeypatch):
+    listing = "/dev/pts/1\t%1\tdefault\n/dev/pts/2\t%2\t" + tui.popup.DIM_STYLE + "\n/dev/pts/3\t%3\n"
+    monkeypatch.setattr(tui, "tmux", lambda *argv: subprocess.CompletedProcess(argv, 0, listing, ""))
+    assert tui.focused_panes() == {"/dev/pts/1": "%1", "/dev/pts/3": "%3"}

@@ -243,7 +243,8 @@ gone are pruned.
 
 On top of the state, the TUI shows two attention marks:
 - **done**: the agent finished (Stop) and no client has kept its pane focused for
-  `[tui] seen_dwell_seconds` since (or the user pressed `x`). Acks: `<state_dir>/tui/acks.json`.
+  `[tui] seen_dwell_seconds` since (or the user pressed `x`). A client whose window carries
+  gopher's popup dim style has a popup open over it and counts as focused on nothing. Acks: `<state_dir>/tui/acks.json`.
 - **needs login**: the agent ran `gopher needs-login` because it is blocked on credentials the
   user must renew (the `all` prompt says when). It marks the session record and clears on the
   user's next prompt or `gopher needs-login --clear`. A window name starting with the ✕ glyph
@@ -267,7 +268,8 @@ On top of the state, the TUI shows two attention marks:
 ### Gopher
 
 - `gopher launch [--session S]` creates the `gopher` tmux session if missing and links its window
-  at index 0 of the current (or named) session; it is idempotent and the shipped tmux config runs
+  at index 0 of the current (or named) session, first moving a window already there to the
+  lowest free index (stock tmux numbers from 0) and saying so; it is idempotent and the shipped tmux config runs
   it when a client attaches. `gopher launch --restart [--continue]` respawns Gopher's pane, fresh
   or continuing its conversation. Gopher runs as `claude --model <[gopher] model> --name gopher
   --permission-mode auto` so peers can message it by name.
@@ -309,7 +311,10 @@ die with the session, and expire after 7 days):
   once. No output means nothing to do. Existing roots get the default schedule on their first
   tick.
 - `gopher schedule run` is the loop: `gopher launch` keeps it in a hidden `schedule` window of the
-  gopher tmux session (`--restart` respawns it with Gopher), one per root under a lock. It ticks
+  gopher tmux session (`--restart` respawns it with Gopher), one per root under a lock. The window's
+  shell runs it inside `sh -c 'while :; do ...; sleep 30; done'`, so a crash restarts it after 30
+  s; and once a minute a sidebar checks the lock and, when no loop holds it while the gopher
+  session exists, recreates or respawns the window (under its own lock, so one sidebar does it). It ticks
   every 10 minutes and appends any output to `<state_dir>/schedule-report.md`.
 - Delivery: scripts cannot use cross-session messaging, so when a report is waiting, Gopher's
   record says it is idle, and its input line is empty, the loop types one line into Gopher's pane:
@@ -347,8 +352,9 @@ seconds.
   stack collapses to its top PR.
 - **Bottom line**: the backup (💾 age since the last save, unsaved changes as `(+lines -lines
   ~files)` in green, red, and yellow, ⇡ unpushed commits, ✓ when clean) and the schedule (🕒 age of the last tick, ➡️ the
-  next custom task due; the built-in `save` and `update-check` are left out). The backup turns yellow when a save is overdue and red without a repository or
-  upstream; the clock turns yellow after 30 minutes without a tick. Git is read once a minute.
+  next custom task due; background tasks such as `save`, `update-check`, and `pr-sync` are left out). The backup turns yellow when a save is overdue or the root has no git remote
+  ("local only": `gopher save` commits and skips the push, exiting 0, and the doctor warns with the
+  `git remote add` commands), and red without a repository or when a remote has no upstream; the clock turns yellow after 30 minutes without a tick. Git is read once a minute.
 
 | Key | Action |
 |---|---|

@@ -81,7 +81,7 @@ ran `gopher needs-login`), working, idle.*
   reopening project windows. **[tmux-assistant-resurrect](https://github.com/timvw/tmux-assistant-resurrect)** additionally records Claude session ids,
   so reopened windows resume their agent.
 
-Developed on Linux; macOS is untested. gopher has had one user so far, so expect rough edges
+Developed on Linux; macOS is untested. gopher has a handful of users so far, so expect rough edges
 (see [Known issues](#known-issues)).
 
 ## Getting started
@@ -327,7 +327,9 @@ added, removed, and files changed in green, red, and yellow (✓ when clean, ⇡
 commits), then the last schedule tick and the next task due (tasks marked `background: true`,
 such as gopher's own save and update check, stay out of it). The backup turns yellow when
 changes have waited longer than the save task's interval (plus half an hour) without a save, and
-red when the root is not a git repository or has no upstream.
+red when the root is not a git repository or its remote has no upstream. A root with no remote at
+all is "local only", shown in yellow: saves commit but stay on your machine until you add a
+private remote (`gopher doctor` prints the commands).
 
 Below it, `gopher ○ idle` shows Gopher's own state (working, needs input, needs login, or not
 running), followed by any warnings and problems from `gopher doctor`, refreshed every minute: a
@@ -356,7 +358,8 @@ schedule too. A root made before a built-in task existed does not get it on upgr
 doctor` names it, and `gopher schedule add-default [NAME]` writes it.
 
 The schedule runs outside Claude: `gopher launch` starts `gopher schedule run` in a hidden window
-of the gopher tmux session, which ticks every ten minutes, runs what is due, and reports events
+of the gopher tmux session (restarted after a crash, and recreated by the sidebar if the window
+goes away), which ticks every ten minutes, runs what is due, and reports events
 (the backup running overdue; at the `proactive` level, projects whose STATUS has not moved in five
 working days). Routine runs stay silent: `notify: failure` (the default for `save`) speaks only
 when the command fails, `notify: change` (for `update-check`) only when its answer changes, and
@@ -429,8 +432,8 @@ rc. Your roots are plain directories; keep or delete them as you like.
 
 - tmux-resurrect does not understand linked windows. Restoring a tmux session may bring Gopher
   back as two windows.
-- While a popup is open, the pane underneath it counts as focused, so its "done" can be marked
-  seen.
+- A popup opened by your own tmux bindings (not gopher's) still leaves the pane underneath it
+  counted as focused, so its "done" can be marked seen.
 
 ## Development
 

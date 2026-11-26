@@ -682,9 +682,26 @@ def loop_log(message: str) -> None:
     print(f"{time.strftime('%Y-%m-%d %H:%M')}  {message}", flush=True)
 
 
+def loop_lock_path(config: Config) -> Path:
+    return config.state_dir / "schedule-run.lock"
+
+
+def loop_running(config: Config) -> bool:
+    path = loop_lock_path(config)
+    if not path.exists():
+        return False
+    with open(path, "a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        return False
+
+
 def run_loop(config: Config, interval: int = LOOP_SECONDS, stop=None, clock=time.time, sleep=time.sleep, log=loop_log) -> None:
     config.state_dir.mkdir(parents=True, exist_ok=True)
-    with open(config.state_dir / "schedule-run.lock", "w") as lock:
+    with open(loop_lock_path(config), "w") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:

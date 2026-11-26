@@ -3,6 +3,7 @@ import subprocess
 import pytest
 
 from claude_gopher import rootgit
+from claude_gopher.cli import main
 from claude_gopher.config import load_config
 from claude_gopher.roots import create_project, create_root
 
@@ -119,3 +120,14 @@ def test_backup_compact_line():
     assert status.compact(5 * 3600, 2) == "\U0001f4be 5h ago (every 2h) (+9 -1 ~3) \u21e12"
     assert rootgit.BackupStatus(last_commit=0, unpushed=None).compact(60, 2) == "\U0001f4be 1m ago \u26a0 no upstream"
     assert rootgit.BackupStatus(error="no repo").compact(0, 2) == "\U0001f4be no repo"
+
+
+def test_a_root_without_a_remote_saves_locally(config, capsys):
+    run("git", "remote", "remove", "origin", cwd=config.root)
+    (config.projects_dir / "alpha" / "notes.md").write_text("local\n")
+    report = rootgit.save(config)
+    assert report.commits and report.local_only and not report.pushed
+    status = rootgit.backup_status(config.root)
+    assert status.local and status.level(status.last_commit, 2) == "local"
+    assert status.compact(status.last_commit, 2).endswith("\u26a0 local only")
+    assert main(["--root", str(config.root), "save"]) == 0

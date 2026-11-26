@@ -18,6 +18,7 @@ class SaveReport:
     commits: list[str] = field(default_factory=list)
     pushed: bool = False
     push_output: str = ""
+    local_only: bool = False
 
 
 def git(root: Path, *argv: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -109,6 +110,10 @@ def busy(root: Path) -> str | None:
     return next((marker for marker in IN_PROGRESS if (git_dir / marker).exists()), None)
 
 
+def has_remote(root: Path) -> bool:
+    return bool(git(root, "remote", check=False).stdout.strip())
+
+
 def save(config: Config, push: bool = True, dry_run: bool = False) -> SaveReport:
     root = config.root
     if git(root, "rev-parse", "--show-toplevel", check=False).stdout.strip() != str(root.resolve()):
@@ -129,7 +134,9 @@ def save(config: Config, push: bool = True, dry_run: bool = False) -> SaveReport
             report.commits.pop()
             continue
         git(root, "commit", "-q", "-m", message)
-    if push and not dry_run and (report.commits or ahead(root)):
+    if push and not dry_run and not has_remote(root):
+        report.local_only = True
+    elif push and not dry_run and (report.commits or ahead(root)):
         result = git(root, "push", "-q", check=False)
         if result.returncode != 0:
             raise SaveError(f"committed {len(report.commits)} change(s) but push failed: {result.stderr.strip()}")
@@ -155,6 +162,7 @@ class BackupStatus:
     removed: int = 0
     unpushed: int | None = None
     error: str | None = None
+    local: bool = False
 
     def counts(self) -> str:
         return f"+{self.added} -{self.removed} ~{self.changed}"
@@ -165,9 +173,11 @@ class BackupStatus:
         return self.last_commit is None or now - self.last_commit > every_hours * 3600 + BACKUP_GRACE_SECONDS
 
     def level(self, now: float, every_hours: float) -> str:
-        if self.error or self.unpushed is None:
+        if self.error or (self.unpushed is None and not self.local):
             return "error"
-        return "overdue" if self.overdue(now, every_hours) else "ok"
+        if self.overdue(now, every_hours):
+            return "overdue"
+        return "local" if self.local else "ok"
 
     def segments(self, now: float, every_hours: float) -> list[tuple[str, str | None]]:
         if self.error:
@@ -181,7 +191,9 @@ class BackupStatus:
                 (" (", None), (f"+{self.added}", "added"), (" ", None), (f"-{self.removed}", "removed"),
                 (" ", None), (f"~{self.changed}", "changed"), (")", None),
             ]
-        if self.unpushed is None:
+        if self.local:
+            parts.append((f" {WARN_ICON} local only", None))
+        elif self.unpushed is None:
             parts.append((f" {WARN_ICON} no upstream", None))
         elif self.unpushed:
             parts.append((f" {UNPUSHED_ICON}{self.unpushed}", None))
@@ -200,7 +212,9 @@ class BackupStatus:
             parts[0] += f" (due every {every_hours:g}h)"
         if self.changed:
             parts.append(f"unsaved {self.counts()}")
-        if self.unpushed is None:
+        if self.local:
+            parts.append("no git remote, so commits stay on this machine")
+        elif self.unpushed is None:
             parts.append("no upstream to push to")
         elif self.unpushed:
             parts.append(f"{self.unpushed} unpushed")
@@ -232,4 +246,5 @@ def backup_status(root: Path) -> BackupStatus:
     added, removed = line_counts(root, rows) if rows else (0, 0)
     return BackupStatus(
         last_commit=float(stamp) if stamp else None, changed=len(rows), added=added, removed=removed, unpushed=unpushed,
+        local=not has_remote(root),
     )

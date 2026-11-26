@@ -1,15 +1,18 @@
 import datetime
+import fcntl
 import shlex
 import subprocess
 
+from claude_gopher import schedule
 from claude_gopher.config import Config, gopher_features
 from claude_gopher.prompt import SESSION_CONTEXTS, assemble
-from claude_gopher.workon import SIDEBAR_COMMANDS, Agent, WorkonError, agent_argv, pick_agent, run_lines
+from claude_gopher.workon import SIDEBAR_COMMANDS, Agent, agent_argv, pick_agent, run_lines
 
 SESSION = "gopher"
 WINDOW = "gopher"
 SCHEDULE_WINDOW = "schedule"
 LINK_INDEX = "0"
+SCHEDULE_RETRY_SECONDS = 30
 DEFAULT_MODEL = "sonnet"
 PROMPT_FILE = "gopher-prompt.md"
 PROMPT_ENV = "GOPHER_PROMPT_FILE"
@@ -117,7 +120,9 @@ def create_session(config: Config) -> str:
 
 
 def schedule_command(config: Config) -> str:
-    return f"gopher --root {shlex.quote(str(config.root))} schedule run"
+    loop = f"gopher --root {shlex.quote(str(config.root))} schedule run"
+    retry = f'echo "schedule loop exited ($?); restarting in {SCHEDULE_RETRY_SECONDS}s"; sleep {SCHEDULE_RETRY_SECONDS}'
+    return "sh -c " + shlex.quote(f"while :; do {loop}; {retry}; done")
 
 
 def schedule_pane() -> str | None:
@@ -137,6 +142,20 @@ def ensure_schedule(config: Config, respawn: bool = False) -> str:
         message = "started the schedule loop"
     tmux("send-keys", "-t", pane, schedule_command(config), "Enter")
     return message
+
+
+def heal_schedule(config: Config) -> str | None:
+    if not has_session(SESSION) or schedule.loop_running(config):
+        return None
+    config.state_dir.mkdir(parents=True, exist_ok=True)
+    with open(config.state_dir / "schedule-heal.lock", "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return None
+        if schedule.loop_running(config):
+            return None
+        return ensure_schedule(config, respawn=schedule_pane() is not None)
 
 
 def agent_pane(window: str) -> str:
@@ -196,11 +215,15 @@ def link(window: str, session: str) -> str:
     existing = window_at(session, LINK_INDEX)
     if existing == window:
         return f"already linked at {session}:{LINK_INDEX}"
+    moved = ""
     if existing:
         name = out("display-message", "-p", "-t", existing, "#{window_name}")
-        raise WorkonError(f"{session}:{LINK_INDEX} is taken by window {name!r}; move it and rerun gopher launch")
+        used = {int(line.split()[0]) for line in out("list-windows", "-t", f"={session}", "-F", "#{window_index} #{window_id}").splitlines()}
+        free = next(index for index in range(1, len(used) + 2) if index not in used)
+        tmux("move-window", "-s", f"={session}:{LINK_INDEX}", "-t", f"={session}:{free}")
+        moved = f"moved window {name!r} from {session}:{LINK_INDEX} to {session}:{free}; "
     tmux("link-window", "-d", "-s", window, "-t", f"={session}:{LINK_INDEX}")
-    return f"linked into {session}:{LINK_INDEX}"
+    return f"{moved}linked into {session}:{LINK_INDEX}"
 
 
 def launch(config: Config, session: str | None) -> list[str]:

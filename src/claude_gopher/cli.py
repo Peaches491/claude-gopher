@@ -202,13 +202,21 @@ def checkout_target(config, project: str | None, path: str | None) -> tuple[str,
 
 def ask(prompt: str, default: str | None = None) -> str:
     if not sys.stdin.isatty():
+        if default:
+            return default
         raise RootError(f"{prompt.rstrip(': ')} is required (no terminal to prompt on)")
     suffix = f" [{default}]" if default else ""
     answer = input(f"{prompt}{suffix}: ").strip()
     return answer or default or ""
 
 
+def need_root_dir(args) -> None:
+    if not args.dir and not sys.stdin.isatty():
+        raise RootError("give the root directory (no terminal to prompt on), e.g. gopher setup ~/workon")
+
+
 def cmd_new(args) -> int:
+    need_root_dir(args)
     target = Path(args.dir or ask("Root directory", "~/workon")).expanduser().resolve()
     check_target(target)
     registry = load_registry()
@@ -240,6 +248,8 @@ def confirm(prompt: str, default: bool = False) -> bool:
 
 
 def cmd_setup(args) -> int:
+    if not args.remove_hooks:
+        need_root_dir(args)
     return run_setup(args, SetupIO(
         ask=ask, confirm=confirm, say=print, launch=launch_interview,
         schedule=lambda args, target: choose_schedule(args, target, ask, print),
@@ -540,6 +550,8 @@ def cmd_save(args) -> int:
         print(f"{verb}: {message}")
     if report.pushed:
         print("pushed")
+    if report.local_only and report.commits and not args.dry_run:
+        print("not pushed: the root has no git remote (gopher doctor shows how to add one)")
     return 0
 
 

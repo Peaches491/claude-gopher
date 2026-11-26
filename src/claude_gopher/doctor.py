@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import time
@@ -48,8 +49,12 @@ def check_config(config: Config) -> list[Check]:
 def check_backup(config: Config, now: float) -> list[Check]:
     status = rootgit.backup_status(config.root)
     every = schedule.save_interval_hours(config)
-    level = {"ok": OK, "overdue": WARN, "error": FAIL}[status.level(now, every)]
-    return [Check(level, "backup", status.describe(now, every).removeprefix("backup: "))]
+    level = {"ok": OK, "overdue": WARN, "local": WARN, "error": FAIL}[status.level(now, every)]
+    message = status.describe(now, every).removeprefix("backup: ")
+    if status.local:
+        root = shlex.quote(str(config.root))
+        message += f"; add a private remote: git -C {root} remote add origin <url> && git -C {root} push -u origin HEAD"
+    return [Check(level, "backup", message)]
 
 
 def check_hooks(path: Path) -> list[Check]:

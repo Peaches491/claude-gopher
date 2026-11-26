@@ -6,7 +6,6 @@ import pytest
 from claude_gopher import launch
 from claude_gopher.config import load_config
 from claude_gopher.roots import create_root
-from claude_gopher.workon import WorkonError
 
 
 @pytest.fixture
@@ -135,11 +134,12 @@ def test_launch_is_idempotent(config, monkeypatch):
     assert sum(c[0] == "new-window" for c in fake.calls) == 1
 
 
-def test_launch_refuses_occupied_index(config, monkeypatch):
-    fake = FakeTmux({"main": [("0", "@1", "editor")], "gopher": [("1", "@9", "gopher")]})
+def test_launch_moves_a_window_off_index_zero(config, monkeypatch):
+    fake = FakeTmux({"main": [("0", "@1", "editor"), ("1", "@2", "logs"), ("3", "@3", "notes")], "gopher": [("1", "@9", "gopher")]})
     monkeypatch.setattr(launch, "tmux", fake)
-    with pytest.raises(WorkonError, match="taken by window 'editor'"):
-        launch.launch(config, "main")
+    assert launch.launch(config, "main")[-1] == "moved window 'editor' from main:0 to main:2; linked into main:0"
+    assert ("move-window", "-s", "=main:0", "-t", "=main:2") in fake.calls
+    assert fake.calls.index(("move-window", "-s", "=main:0", "-t", "=main:2")) < next(i for i, c in enumerate(fake.calls) if c[0] == "link-window")
 
 
 def test_launch_skips_linking_into_gopher_session(config, monkeypatch):
@@ -189,7 +189,9 @@ def test_restart_respawns_the_gopher_pane(config, monkeypatch):
     assert ("respawn-pane", "-k", "-t", "%1", "-c", str(config.agent_dir)) in fake.calls
     assert ("respawn-pane", "-k", "-t", "%5", "-c", str(config.root)) in fake.calls
     sent = [c[-2] for c in fake.calls if c[0] == "send-keys"]
-    assert sent == [f"gopher --root {config.root} launch --exec-agent --continue", f"gopher --root {config.root} schedule run"]
+    assert sent == [f"gopher --root {config.root} launch --exec-agent --continue", launch.schedule_command(config)]
+    loop = shlex.split(sent[1])
+    assert loop[:2] == ["sh", "-c"] and loop[2].startswith(f"while :; do gopher --root {config.root} schedule run; ")
     assert not any(c[0] in ("new-session", "link-window") for c in fake.calls)
 
 
@@ -203,3 +205,19 @@ def test_resumed_gopher_is_told_to_reschedule(config):
     line = launch.agent_lines(config, [], resume=True)[-1]
     assert "--continue" in line and "just restarted" in line and "Start of session" not in line
     assert "Start of session" in launch.agent_lines(config, [])[-1]
+
+
+def test_heal_schedule_restarts_only_a_dead_loop(config, monkeypatch):
+    fake = FakeTmux({"main": [], "gopher": [("1", "@9", "gopher")]})
+    monkeypatch.setattr(launch, "tmux", fake)
+    assert launch.heal_schedule(config) == "started the schedule loop"
+    fake.schedule = True
+    assert launch.heal_schedule(config) == "restarted the schedule loop"
+    launch.schedule.loop_lock_path(config).parent.mkdir(parents=True, exist_ok=True)
+    with open(launch.schedule.loop_lock_path(config), "w") as held:
+        launch.fcntl.flock(held, launch.fcntl.LOCK_EX)
+        assert launch.schedule.loop_running(config)
+        assert launch.heal_schedule(config) is None
+    assert not launch.schedule.loop_running(config)
+    del fake.sessions["gopher"]
+    assert launch.heal_schedule(config) is None

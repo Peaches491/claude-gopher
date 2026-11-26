@@ -1,4 +1,5 @@
 import json
+import subprocess
 
 import pytest
 
@@ -46,7 +47,11 @@ def test_hooks_missing_and_stale(tmp_path):
         doctor.shutil.which = monkey
 
 
-def test_backup_without_upstream_fails(config):
+def test_backup_without_a_remote_warns_and_a_broken_upstream_fails(config):
+    checks = doctor.check_backup(config, 0)
+    assert levels(checks, "backup") == [doctor.WARN]
+    assert "no git remote" in checks[0].message and "remote add origin <url>" in checks[0].message
+    subprocess.run(["git", "-C", str(config.root), "remote", "add", "origin", "/nonexistent"], check=True)
     assert levels(doctor.check_backup(config, 0), "backup") == [doctor.FAIL]
 
 

@@ -26,7 +26,7 @@ from claude_gopher.config import (
 from claude_gopher import devreload, doctor, lifecycle, popup, restore, schedule
 from claude_gopher.checkouts import read_checkouts
 from claude_gopher.inbox import add_item, mark_read, unread
-from claude_gopher.launch import write_prompt
+from claude_gopher.launch import heal_schedule, write_prompt
 from claude_gopher.overview import (
     CREDS, DONE, Acks, Resource, current_sessions, effective_state, most_urgent, open_tickets, project_overview,
     visible_prs,
@@ -40,7 +40,7 @@ from claude_gopher.workon import status_editor_command
 
 REFRESH_SECONDS = 5
 BACKUP_REFRESH_SECONDS = 60
-BACKUP_STYLES = {"ok": "bright_black", "overdue": "yellow", "error": "red"}
+BACKUP_STYLES = {"ok": "bright_black", "overdue": "yellow", "local": "yellow", "error": "red"}
 CHANGE_STYLES = {"added": "green", "removed": "red", "changed": "yellow"}
 RELOAD_CHECK_SECONDS = 2
 RELOAD_ENV = "GOPHER_TUI_RELOADS"
@@ -246,10 +246,15 @@ def next_level(level: str) -> str:
 
 
 def focused_panes() -> dict[str, str]:
-    listing = tmux("list-clients", "-F", "#{client_name}\t#{pane_id}")
+    listing = tmux("list-clients", "-F", "#{client_name}\t#{pane_id}\t#{window-style}")
     if listing.returncode != 0:
         return {}
-    return dict(line.split("\t", 1) for line in listing.stdout.splitlines() if "\t" in line)
+    focus = {}
+    for line in listing.stdout.splitlines():
+        client, pane, style = (line.split("\t") + ["", ""])[:3]
+        if pane and style != popup.DIM_STYLE:
+            focus[client] = pane
+    return focus
 
 
 class FocusTracker:
@@ -1017,6 +1022,12 @@ class GopherTUI(App):
             self.backup, self.backup_checked = backup_status(self.config.root), now
             self.save_hours = schedule.save_interval_hours(self.config)
             self.health = doctor.undismissed(self.config, doctor.run(self.config, now=now))
+            try:
+                healed = heal_schedule(self.config)
+            except (OSError, subprocess.SubprocessError):
+                healed = None
+            if healed:
+                self.call_from_thread(self.notify, f"Schedule: {healed}")
         self.heartbeat = schedule.heartbeat_compact(self.config, now)
         self.gopher_state = gopher_state(self.config)
         self.call_from_thread(self.show, projects)
